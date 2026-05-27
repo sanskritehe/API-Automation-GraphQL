@@ -1,0 +1,13 @@
+{
+  "appointment": [
+    {"repo": "sanskritehe/Appointment-Service", "role": "api",      "operations": ["GET","POST","PUT","PATCH","DELETE"]},
+    {"repo": "sanskritehe/Appointment-Database-Service", "role": "database", "operations": ["GET","POST","PUT","PATCH","DELETE"]}
+  ],
+  "patient": [
+    {"repo": "sanskritehe/Patient-Service", "role": "api",      "operations": ["GET","POST","PUT","DELETE"]}
+  ],
+  "billing": [
+    {"repo": "sanskritehe/Billing-Service", "role": "api",      "operations": ["GET","POST","PUT","DELETE"]},
+    {"repo": "sanskritehe/Billing-DB",      "role": "database", "operations": ["POST","PUT","DELETE"]}
+  ]
+}

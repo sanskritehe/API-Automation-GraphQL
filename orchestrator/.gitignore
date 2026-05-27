@@ -1,0 +1,10 @@
+.env
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+resp*.txt
+judge*.txt
+generated_solution.md
+prompt.md

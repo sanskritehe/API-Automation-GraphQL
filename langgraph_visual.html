@@ -1,0 +1,537 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <title>LangGraph Deep Dive</title>
+  <style>
+    *{box-sizing:border-box;margin:0;padding:0;}
+    body{background:#0d1117;color:#e6edf3;font-family:'Segoe UI',monospace,sans-serif;padding:36px 24px;}
+
+    h1{text-align:center;font-size:20px;color:#58a6ff;margin-bottom:4px;font-weight:700;}
+    .subtitle{text-align:center;font-size:12px;color:#8b949e;margin-bottom:36px;}
+
+    /* ── section headers ── */
+    .section{max-width:980px;margin:0 auto 40px;}
+    .section-title{
+      font-size:12px;font-weight:700;letter-spacing:1px;text-transform:uppercase;
+      color:#8b949e;border-bottom:1px solid #21262d;padding-bottom:8px;margin-bottom:20px;
+    }
+
+    /* ── concept cards row ── */
+    .cards{display:flex;gap:12px;flex-wrap:wrap;}
+    .card{
+      flex:1;min-width:170px;border-radius:10px;padding:14px 16px;
+      border:1px solid #21262d;background:#161b22;
+    }
+    .card-icon{font-size:20px;margin-bottom:8px;}
+    .card-title{font-size:12px;font-weight:700;margin-bottom:6px;}
+    .card-body{font-size:11px;color:#8b949e;line-height:1.6;}
+    .card.purple{border-color:#6e40c9;background:#130d22;}
+    .card.blue  {border-color:#1f6feb;background:#0d1f33;}
+    .card.green {border-color:#238636;background:#0d1f0d;}
+    .card.orange{border-color:#d29922;background:#1f1500;}
+    .card.teal  {border-color:#138a8a;background:#091f1f;}
+    .card.red   {border-color:#da3633;background:#1f0d0d;}
+    .card.purple .card-title{color:#bc8cff;}
+    .card.blue   .card-title{color:#58a6ff;}
+    .card.green  .card-title{color:#3fb950;}
+    .card.orange .card-title{color:#e3b341;}
+    .card.teal   .card-title{color:#39d3d3;}
+    .card.red    .card-title{color:#f85149;}
+
+    /* ── state box ── */
+    .state-box{
+      background:#0d1117;border:1px solid #6e40c9;border-radius:10px;
+      padding:16px 20px;font-size:11px;line-height:1.8;
+      font-family:'Courier New',monospace;
+    }
+    .state-box .key{color:#bc8cff;}
+    .state-box .val{color:#79c0ff;}
+    .state-box .typ{color:#8b949e;}
+    .state-box .comment{color:#484f58;}
+
+    /* ── graph canvas ── */
+    .graph-outer{
+      border:2px dashed #21262d;border-radius:14px;padding:28px 20px 20px;
+      background:#0a0e14;position:relative;max-width:980px;margin:0 auto;
+    }
+    .graph-outer-label{
+      position:absolute;top:-13px;left:18px;background:#0a0e14;
+      padding:0 8px;font-size:11px;font-weight:700;color:#58a6ff;letter-spacing:.5px;
+    }
+
+    /* nodes */
+    .g-row{display:flex;align-items:center;justify-content:center;gap:0;margin:6px 0;}
+    .g-node{
+      border-radius:10px;padding:12px 20px;text-align:center;
+      min-width:150px;max-width:190px;
+    }
+    .g-node .nt{font-size:12px;font-weight:700;margin-bottom:3px;}
+    .g-node .ns{font-size:10px;color:#8b949e;line-height:1.5;}
+
+    .n-start {background:#0d2a1a;border:2px solid #238636;}
+    .n-start .nt{color:#3fb950;}
+    .n-end   {background:#0d2a1a;border:2px solid #238636;}
+    .n-end   .nt{color:#3fb950;}
+    .n-gen   {background:#130d22;border:2px solid #6e40c9;}
+    .n-gen   .nt{color:#bc8cff;}
+    .n-judge {background:#0d1f33;border:2px solid #1f6feb;}
+    .n-judge .nt{color:#58a6ff;}
+    .n-route {background:#1f1500;border:2px dashed #d29922;border-radius:50%;
+               width:80px;height:80px;display:flex;flex-direction:column;
+               align-items:center;justify-content:center;min-width:80px;max-width:80px;}
+    .n-route .nt{color:#e3b341;font-size:11px;}
+    .n-route .ns{font-size:9px;}
+
+    /* arrows */
+    .h-arrow{display:flex;align-items:center;width:60px;flex-shrink:0;}
+    .h-line{height:2px;flex:1;background:#30363d;}
+    .h-head{width:0;height:0;border-top:6px solid transparent;
+            border-bottom:6px solid transparent;border-left:8px solid #30363d;}
+
+    .v-arrow{display:flex;flex-direction:column;align-items:center;height:44px;}
+    .v-line{width:2px;flex:1;background:#30363d;}
+    .v-head{width:0;height:0;border-left:6px solid transparent;
+            border-right:6px solid transparent;border-top:8px solid #30363d;}
+
+    .arrow-label{font-size:10px;color:#8b949e;text-align:center;padding:2px 6px;}
+
+    /* retry curved arrow — done with SVG overlay */
+    .retry-svg{width:100%;margin-top:4px;}
+
+    /* branch labels on router */
+    .branch-row{
+      display:flex;justify-content:space-around;
+      margin:4px 0;font-size:10px;
+    }
+    .branch-pass{color:#3fb950;}
+    .branch-fail{color:#f85149;}
+
+    /* ── edge table ── */
+    table{width:100%;border-collapse:collapse;font-size:11px;}
+    th{
+      background:#161b22;color:#8b949e;font-weight:600;
+      padding:8px 12px;text-align:left;border-bottom:1px solid #21262d;
+      letter-spacing:.4px;font-size:10px;text-transform:uppercase;
+    }
+    td{padding:8px 12px;border-bottom:1px solid #161b22;vertical-align:top;}
+    tr:last-child td{border-bottom:none;}
+    .edge-from{color:#bc8cff;font-family:'Courier New',monospace;}
+    .edge-to  {color:#58a6ff;font-family:'Courier New',monospace;}
+    .edge-cond{color:#e3b341;font-family:'Courier New',monospace;}
+    .edge-why {color:#8b949e;}
+
+    /* ── code block ── */
+    .code{
+      background:#161b22;border:1px solid #21262d;border-radius:8px;
+      padding:16px 18px;font-family:'Courier New',monospace;font-size:11px;
+      line-height:1.9;overflow-x:auto;
+    }
+    .kw {color:#ff7b72;}
+    .fn {color:#d2a8ff;}
+    .cl {color:#ffa657;}
+    .st {color:#a5d6ff;}
+    .cm {color:#484f58;}
+    .nm {color:#e6edf3;}
+    .op {color:#79c0ff;}
+
+    /* ── state flow timeline ── */
+    .timeline{display:flex;flex-direction:column;gap:0;}
+    .tl-row{display:flex;align-items:flex-start;gap:16px;padding:10px 0;}
+    .tl-row+.tl-row{border-top:1px solid #161b22;}
+    .tl-step{
+      min-width:100px;font-size:11px;font-weight:700;
+      padding:4px 10px;border-radius:6px;text-align:center;flex-shrink:0;
+    }
+    .tl-state{font-size:11px;font-family:'Courier New',monospace;color:#8b949e;line-height:1.7;}
+    .tl-state span{color:#e6edf3;}
+  </style>
+</head>
+<body>
+
+<h1>LangGraph — How the Graph Works</h1>
+<p class="subtitle">State · Nodes · Edges · Conditional Routing · Retry Loop</p>
+
+
+<!-- ══════════════════════════════════════════════════
+     SECTION 1 — CORE CONCEPTS
+════════════════════════════════════════════════════ -->
+<div class="section">
+  <div class="section-title">1 · Core Concepts</div>
+  <div class="cards">
+
+    <div class="card purple">
+      <div class="card-icon">🗂</div>
+      <div class="card-title">StateGraph</div>
+      <div class="card-body">
+        The top-level object. You define a <em>typed state dict</em> and attach nodes + edges to it.
+        Every node reads from and writes back to this shared state.
+      </div>
+    </div>
+
+    <div class="card blue">
+      <div class="card-icon">⬡</div>
+      <div class="card-title">Node</div>
+      <div class="card-body">
+        A plain Python function <code>(state) → patch</code>.
+        It receives the full state, does work (calls an LLM, etc.), and returns
+        only the fields it wants to update.
+      </div>
+    </div>
+
+    <div class="card green">
+      <div class="card-icon">→</div>
+      <div class="card-title">Normal Edge</div>
+      <div class="card-body">
+        Always goes from node A to node B.
+        Used for unconditional transitions like
+        <code>START → generate</code>.
+      </div>
+    </div>
+
+    <div class="card orange">
+      <div class="card-icon">⋈</div>
+      <div class="card-title">Conditional Edge</div>
+      <div class="card-body">
+        A router function reads the state and returns a string key
+        (<code>"pass"</code> / <code>"fail"</code>).
+        LangGraph maps that key to the next node.
+      </div>
+    </div>
+
+    <div class="card teal">
+      <div class="card-icon">🔁</div>
+      <div class="card-title">Cycle</div>
+      <div class="card-body">
+        Unlike a DAG, LangGraph allows cycles.
+        The <code>fail</code> edge loops back to <code>generate</code>,
+        creating the retry loop. A counter in state stops infinite loops.
+      </div>
+    </div>
+
+    <div class="card red">
+      <div class="card-icon">🏁</div>
+      <div class="card-title">END</div>
+      <div class="card-body">
+        A built-in sentinel node. When an edge points to <code>END</code>
+        the graph halts and returns the final state to the caller.
+      </div>
+    </div>
+
+  </div>
+</div>
+
+
+<!-- ══════════════════════════════════════════════════
+     SECTION 2 — STATE OBJECT
+════════════════════════════════════════════════════ -->
+<div class="section">
+  <div class="section-title">2 · The State Object  (shared across all nodes)</div>
+  <div class="state-box">
+<span class="comment"># Defined once as a TypedDict — every node reads/writes fields from this</span><br>
+<span class="key">class</span> <span class="val">AgentState</span>(<span class="typ">TypedDict</span>):<br>
+&nbsp;&nbsp;<span class="comment"># ── inputs (set before graph starts) ─────────────────────────────────</span><br>
+&nbsp;&nbsp;<span class="key">prompt</span>        <span class="typ">: str</span>   <span class="comment"># full prompt.md content (ticket + Confluence spec)</span><br>
+&nbsp;&nbsp;<span class="key">app_dir</span>       <span class="typ">: str</span>   <span class="comment"># path to app/ folder to write generated files into</span><br>
+<br>
+&nbsp;&nbsp;<span class="comment"># ── written by generate node ──────────────────────────────────────────</span><br>
+&nbsp;&nbsp;<span class="key">generated_code</span> <span class="typ">: str</span>  <span class="comment"># raw code block returned by Claude Sonnet</span><br>
+<br>
+&nbsp;&nbsp;<span class="comment"># ── written by judge node ─────────────────────────────────────────────</span><br>
+&nbsp;&nbsp;<span class="key">verdict</span>       <span class="typ">: str</span>   <span class="comment"># "PASS" or "FAIL"</span><br>
+&nbsp;&nbsp;<span class="key">feedback</span>      <span class="typ">: str</span>   <span class="comment"># judge explanation — fed back into next generate call</span><br>
+<br>
+&nbsp;&nbsp;<span class="comment"># ── managed by router ─────────────────────────────────────────────────</span><br>
+&nbsp;&nbsp;<span class="key">iterations</span>    <span class="typ">: int</span>   <span class="comment"># incremented each time generate runs</span><br>
+&nbsp;&nbsp;<span class="key">final_code</span>    <span class="typ">: str</span>   <span class="comment"># set when verdict == PASS — this is returned to pipeline.py</span><br>
+  </div>
+</div>
+
+
+<!-- ══════════════════════════════════════════════════
+     SECTION 3 — THE GRAPH DIAGRAM
+════════════════════════════════════════════════════ -->
+<div class="section">
+  <div class="section-title">3 · Graph Structure</div>
+
+  <div class="graph-outer">
+    <span class="graph-outer-label">StateGraph(AgentState)</span>
+
+    <!-- START -->
+    <div class="g-row">
+      <div class="g-node n-start">
+        <div class="nt">START</div>
+        <div class="ns">initial state injected<br>prompt + app_dir set<br>iterations = 0</div>
+      </div>
+    </div>
+
+    <!-- START → generate (normal edge) -->
+    <div class="g-row">
+      <div class="v-arrow"><div class="v-line"></div><div class="v-head"></div></div>
+    </div>
+    <div class="branch-row"><span style="color:#3fb950;font-size:10px;">normal edge</span></div>
+
+    <!-- GENERATE -->
+    <div class="g-row">
+      <div class="g-node n-gen">
+        <div class="nt">generate</div>
+        <div class="ns">
+          Claude Sonnet 4.6<br>
+          prompt + feedback → code<br>
+          iterations += 1
+        </div>
+      </div>
+    </div>
+
+    <!-- generate → judge (normal edge) -->
+    <div class="g-row">
+      <div class="v-arrow"><div class="v-line"></div><div class="v-head"></div></div>
+    </div>
+    <div class="branch-row"><span style="color:#3fb950;font-size:10px;">normal edge</span></div>
+
+    <!-- JUDGE -->
+    <div class="g-row">
+      <div class="g-node n-judge">
+        <div class="nt">judge</div>
+        <div class="ns">
+          Claude Opus 4.6<br>
+          scores generated_code<br>
+          writes verdict + feedback
+        </div>
+      </div>
+    </div>
+
+    <!-- judge → router (normal edge) -->
+    <div class="g-row">
+      <div class="v-arrow"><div class="v-line"></div><div class="v-head"></div></div>
+    </div>
+    <div class="branch-row"><span style="color:#3fb950;font-size:10px;">normal edge</span></div>
+
+    <!-- ROUTER -->
+    <div class="g-row">
+      <div class="g-node n-route">
+        <div class="nt">router</div>
+        <div class="ns">reads<br>verdict<br>+ iters</div>
+      </div>
+    </div>
+
+    <!-- branch labels -->
+    <div class="branch-row" style="max-width:420px;margin:6px auto;">
+      <span class="branch-pass">▼ "pass"</span>
+      <span class="branch-fail">↺ "fail"  (iters &lt; 3)</span>
+      <span class="branch-fail" style="color:#e3b341;">▼ "max"  (iters ≥ 3)</span>
+    </div>
+
+    <!-- SVG retry arc + pass/max down arrows -->
+    <svg class="retry-svg" height="90" viewBox="0 0 900 90" preserveAspectRatio="xMidYMid meet">
+      <!-- pass: straight down left -->
+      <line x1="390" y1="10" x2="260" y2="10" stroke="#3fb950" stroke-width="1.5" stroke-dasharray="4 3"/>
+      <line x1="260" y1="10" x2="260" y2="80" stroke="#3fb950" stroke-width="1.5" stroke-dasharray="4 3"/>
+      <polygon points="255,74 265,74 260,82" fill="#3fb950"/>
+      <text x="170" y="50" fill="#3fb950" font-size="10" font-family="monospace">→ END</text>
+
+      <!-- fail: loop back right side -->
+      <line x1="510" y1="10" x2="670" y2="10" stroke="#f85149" stroke-width="1.5" stroke-dasharray="4 3"/>
+      <line x1="670" y1="10" x2="670" y2="80" stroke="#f85149" stroke-width="1.5" stroke-dasharray="4 3"/>
+      <text x="685" y="50" fill="#f85149" font-size="10" font-family="monospace">↺ back to generate</text>
+      <text x="685" y="63" fill="#484f58" font-size="9" font-family="monospace">with feedback in state</text>
+
+      <!-- max: straight down center -->
+      <line x1="450" y1="10" x2="450" y2="80" stroke="#e3b341" stroke-width="1.5" stroke-dasharray="4 3"/>
+      <polygon points="445,74 455,74 450,82" fill="#e3b341"/>
+      <text x="456" y="50" fill="#e3b341" font-size="10" font-family="monospace">→ END (best attempt)</text>
+    </svg>
+
+    <!-- END row -->
+    <div class="g-row" style="margin-top:4px;">
+      <div class="g-node n-end" style="max-width:260px;">
+        <div class="nt">END</div>
+        <div class="ns">returns final_code<br>to pipeline.py</div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+
+<!-- ══════════════════════════════════════════════════
+     SECTION 4 — EDGE TABLE
+════════════════════════════════════════════════════ -->
+<div class="section">
+  <div class="section-title">4 · Edge Definitions</div>
+  <table>
+    <tr>
+      <th>From</th><th>To</th><th>Type</th><th>Condition / Router logic</th>
+    </tr>
+    <tr>
+      <td class="edge-from">START</td>
+      <td class="edge-to">generate</td>
+      <td><span style="color:#3fb950">normal</span></td>
+      <td class="edge-why">Always. Kicks off the first generation.</td>
+    </tr>
+    <tr>
+      <td class="edge-from">generate</td>
+      <td class="edge-to">judge</td>
+      <td><span style="color:#3fb950">normal</span></td>
+      <td class="edge-why">Always. Every generation is judged.</td>
+    </tr>
+    <tr>
+      <td class="edge-from">judge</td>
+      <td class="edge-to">router fn</td>
+      <td><span style="color:#3fb950">normal</span></td>
+      <td class="edge-why">Always. Passes state to the router function.</td>
+    </tr>
+    <tr>
+      <td class="edge-from">router fn</td>
+      <td class="edge-to">END</td>
+      <td><span style="color:#e3b341">conditional</span></td>
+      <td class="edge-cond">verdict == "PASS"</td>
+    </tr>
+    <tr>
+      <td class="edge-from">router fn</td>
+      <td class="edge-to">generate</td>
+      <td><span style="color:#e3b341">conditional</span></td>
+      <td class="edge-cond">verdict == "FAIL" AND iterations &lt; 3</td>
+    </tr>
+    <tr>
+      <td class="edge-from">router fn</td>
+      <td class="edge-to">END</td>
+      <td><span style="color:#e3b341">conditional</span></td>
+      <td class="edge-cond">iterations &ge; 3  (max retries — use best attempt)</td>
+    </tr>
+  </table>
+</div>
+
+
+<!-- ══════════════════════════════════════════════════
+     SECTION 5 — PSEUDOCODE
+════════════════════════════════════════════════════ -->
+<div class="section">
+  <div class="section-title">5 · How It Maps to Code</div>
+  <div class="code">
+<span class="cm"># ── 1. Define state ──────────────────────────────────────────────────────</span><br>
+<span class="kw">class</span> <span class="cl">AgentState</span>(<span class="cl">TypedDict</span>):<br>
+&nbsp;&nbsp;<span class="nm">prompt</span>, <span class="nm">app_dir</span>, <span class="nm">generated_code</span>, <span class="nm">verdict</span>, <span class="nm">feedback</span>, <span class="nm">iterations</span>, <span class="nm">final_code</span><br>
+<br>
+<span class="cm"># ── 2. Define nodes (plain functions) ────────────────────────────────────</span><br>
+<span class="kw">def</span> <span class="fn">generate</span>(<span class="nm">state</span>: <span class="cl">AgentState</span>) <span class="op">→</span> <span class="cl">dict</span>:<br>
+&nbsp;&nbsp;<span class="nm">msgs</span> = [{ <span class="st">"role"</span>: <span class="st">"user"</span>, <span class="st">"content"</span>: state[<span class="st">"prompt"</span>] + state.get(<span class="st">"feedback"</span>, <span class="st">""</span>) }]<br>
+&nbsp;&nbsp;<span class="nm">code</span> = <span class="fn">claude_sonnet</span>(<span class="nm">msgs</span>)&nbsp;&nbsp;<span class="cm"># calls Anthropic API</span><br>
+&nbsp;&nbsp;<span class="kw">return</span> { <span class="st">"generated_code"</span>: <span class="nm">code</span>, <span class="st">"iterations"</span>: state[<span class="st">"iterations"</span>] + <span class="op">1</span> }<br>
+<br>
+<span class="kw">def</span> <span class="fn">judge</span>(<span class="nm">state</span>: <span class="cl">AgentState</span>) <span class="op">→</span> <span class="cl">dict</span>:<br>
+&nbsp;&nbsp;<span class="nm">result</span> = <span class="fn">claude_opus</span>(<span class="nm">judge_prompt</span> + state[<span class="st">"generated_code"</span>])<br>
+&nbsp;&nbsp;<span class="nm">verdict</span>, <span class="nm">feedback</span> = <span class="fn">parse_verdict</span>(<span class="nm">result</span>)<br>
+&nbsp;&nbsp;<span class="kw">return</span> { <span class="st">"verdict"</span>: <span class="nm">verdict</span>, <span class="st">"feedback"</span>: <span class="nm">feedback</span> }<br>
+<br>
+<span class="kw">def</span> <span class="fn">router</span>(<span class="nm">state</span>: <span class="cl">AgentState</span>) <span class="op">→</span> <span class="cl">str</span>:&nbsp;&nbsp;<span class="cm"># returns edge key, NOT a state patch</span><br>
+&nbsp;&nbsp;<span class="kw">if</span> state[<span class="st">"verdict"</span>] == <span class="st">"PASS"</span>: &nbsp;&nbsp;<span class="kw">return</span> <span class="st">"pass"</span><br>
+&nbsp;&nbsp;<span class="kw">if</span> state[<span class="st">"iterations"</span>] &ge; <span class="op">3</span>: &nbsp;&nbsp;&nbsp;&nbsp;<span class="kw">return</span> <span class="st">"max"</span><br>
+&nbsp;&nbsp;<span class="kw">return</span> <span class="st">"fail"</span><br>
+<br>
+<span class="cm"># ── 3. Build the graph ────────────────────────────────────────────────────</span><br>
+<span class="nm">graph</span> = <span class="cl">StateGraph</span>(<span class="cl">AgentState</span>)<br>
+<br>
+<span class="nm">graph</span>.<span class="fn">add_node</span>(<span class="st">"generate"</span>, <span class="fn">generate</span>)&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="cm"># register nodes</span><br>
+<span class="nm">graph</span>.<span class="fn">add_node</span>(<span class="st">"judge"</span>,    <span class="fn">judge</span>)<br>
+<br>
+<span class="nm">graph</span>.<span class="fn">add_edge</span>(<span class="cl">START</span>, <span class="st">"generate"</span>)&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="cm"># normal edges</span><br>
+<span class="nm">graph</span>.<span class="fn">add_edge</span>(<span class="st">"generate"</span>, <span class="st">"judge"</span>)<br>
+<br>
+<span class="nm">graph</span>.<span class="fn">add_conditional_edges</span>(&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="cm"># conditional edge</span><br>
+&nbsp;&nbsp;<span class="st">"judge"</span>,&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="cm"># source node</span><br>
+&nbsp;&nbsp;<span class="fn">router</span>,&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="cm"># router function</span><br>
+&nbsp;&nbsp;{ <span class="st">"pass"</span>: <span class="cl">END</span>, <span class="st">"fail"</span>: <span class="st">"generate"</span>, <span class="st">"max"</span>: <span class="cl">END</span> }&nbsp;&nbsp;<span class="cm"># key → next node map</span><br>
+)<br>
+<br>
+<span class="nm">app</span> = <span class="nm">graph</span>.<span class="fn">compile</span>()&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="cm"># compile into runnable</span><br>
+<br>
+<span class="cm"># ── 4. Invoke from pipeline.py ───────────────────────────────────────────</span><br>
+<span class="nm">final_state</span> = <span class="kw">await</span> <span class="nm">app</span>.<span class="fn">ainvoke</span>({<br>
+&nbsp;&nbsp;<span class="st">"prompt"</span>: <span class="nm">prompt_content</span>, <span class="st">"app_dir"</span>: <span class="nm">app_dir</span>,<br>
+&nbsp;&nbsp;<span class="st">"iterations"</span>: <span class="op">0</span>, <span class="st">"feedback"</span>: <span class="st">""</span><br>
+})<br>
+<span class="nm">final_code</span> = <span class="nm">final_state</span>[<span class="st">"final_code"</span>]&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="cm"># handed to deploy_to_repo()</span>
+  </div>
+</div>
+
+
+<!-- ══════════════════════════════════════════════════
+     SECTION 6 — STATE EVOLUTION TIMELINE
+════════════════════════════════════════════════════ -->
+<div class="section">
+  <div class="section-title">6 · State Evolution Through a FAIL → FAIL → PASS Run</div>
+  <div class="timeline">
+
+    <div class="tl-row">
+      <div class="tl-step" style="background:#0d2a1a;color:#3fb950;border:1px solid #238636;">START</div>
+      <div class="tl-state">
+        prompt=<span>"GET /appointments/{id}..."</span>&nbsp;&nbsp;
+        iterations=<span>0</span>&nbsp;&nbsp;
+        generated_code=<span>None</span>&nbsp;&nbsp;
+        verdict=<span>None</span>&nbsp;&nbsp;
+        feedback=<span>""</span>
+      </div>
+    </div>
+
+    <div class="tl-row">
+      <div class="tl-step" style="background:#130d22;color:#bc8cff;border:1px solid #6e40c9;">generate ①</div>
+      <div class="tl-state">
+        generated_code=<span>"def get_appointment(id):..."</span>&nbsp;&nbsp;
+        iterations=<span>1</span>
+      </div>
+    </div>
+
+    <div class="tl-row">
+      <div class="tl-step" style="background:#0d1f33;color:#58a6ff;border:1px solid #1f6feb;">judge ①</div>
+      <div class="tl-state">
+        verdict=<span>"FAIL"</span>&nbsp;&nbsp;
+        feedback=<span>"Missing 404 handling when appointment not found"</span>
+      </div>
+    </div>
+
+    <div class="tl-row">
+      <div class="tl-step" style="background:#1f0500;color:#f85149;border:1px solid #da3633;">router → fail</div>
+      <div class="tl-state">
+        iterations=<span>1</span> &lt; 3 &nbsp;→&nbsp; edge key = <span>"fail"</span> &nbsp;→&nbsp; next node = <span>generate</span>
+      </div>
+    </div>
+
+    <div class="tl-row">
+      <div class="tl-step" style="background:#130d22;color:#bc8cff;border:1px solid #6e40c9;">generate ②</div>
+      <div class="tl-state">
+        generated_code=<span>"def get_appointment(id): ... raise HTTPException(404)..."</span>&nbsp;&nbsp;
+        iterations=<span>2</span>
+        &nbsp;&nbsp;<span style="color:#484f58"># feedback was appended to prompt</span>
+      </div>
+    </div>
+
+    <div class="tl-row">
+      <div class="tl-step" style="background:#0d1f33;color:#58a6ff;border:1px solid #1f6feb;">judge ②</div>
+      <div class="tl-state">
+        verdict=<span>"PASS"</span>&nbsp;&nbsp;
+        feedback=<span>"Correct. 404 handled, response schema matches spec."</span>
+      </div>
+    </div>
+
+    <div class="tl-row">
+      <div class="tl-step" style="background:#0d2a1a;color:#3fb950;border:1px solid #238636;">router → pass</div>
+      <div class="tl-state">
+        verdict=<span>"PASS"</span> &nbsp;→&nbsp; edge key = <span>"pass"</span> &nbsp;→&nbsp; next node = <span>END</span>
+        &nbsp;&nbsp;final_code = generated_code
+      </div>
+    </div>
+
+    <div class="tl-row">
+      <div class="tl-step" style="background:#0d2a1a;color:#3fb950;border:1px solid #238636;">END</div>
+      <div class="tl-state">
+        final_code returned to <span>pipeline.py → deploy_to_repo()</span>&nbsp;&nbsp;
+        <span style="color:#484f58">2 iterations used, 1 remaining</span>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+</body>
+</html>

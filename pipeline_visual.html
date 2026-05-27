@@ -1,0 +1,485 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>HPE AI Dev Pipeline</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: #0d1117;
+      color: #e6edf3;
+      font-family: 'Segoe UI', sans-serif;
+      padding: 40px 20px;
+      min-height: 100vh;
+    }
+
+    h1 {
+      text-align: center;
+      font-size: 22px;
+      font-weight: 600;
+      color: #58a6ff;
+      margin-bottom: 6px;
+      letter-spacing: 0.5px;
+    }
+
+    .subtitle {
+      text-align: center;
+      font-size: 13px;
+      color: #8b949e;
+      margin-bottom: 40px;
+    }
+
+    /* ── Layout ── */
+    .pipeline {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 0;
+      max-width: 860px;
+      margin: 0 auto;
+    }
+
+    /* ── Generic node ── */
+    .node {
+      border-radius: 10px;
+      padding: 14px 22px;
+      text-align: center;
+      position: relative;
+      width: 100%;
+    }
+
+    .node-title {
+      font-size: 13px;
+      font-weight: 700;
+      letter-spacing: 0.4px;
+      margin-bottom: 4px;
+    }
+
+    .node-sub {
+      font-size: 11px;
+      color: #8b949e;
+      line-height: 1.5;
+    }
+
+    /* ── Connector arrow ── */
+    .arrow {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 0;
+      margin: 0;
+    }
+
+    .arrow-line {
+      width: 2px;
+      height: 28px;
+      background: #30363d;
+    }
+
+    .arrow-head {
+      width: 0;
+      height: 0;
+      border-left: 7px solid transparent;
+      border-right: 7px solid transparent;
+      border-top: 9px solid #30363d;
+    }
+
+    .arrow-label {
+      font-size: 10px;
+      color: #8b949e;
+      margin-top: 2px;
+      margin-bottom: 2px;
+    }
+
+    /* ── Colour themes ── */
+    .blue   { background: #0d2340; border: 1px solid #1f6feb; }
+    .blue   .node-title { color: #58a6ff; }
+
+    .green  { background: #0d2a1a; border: 1px solid #238636; }
+    .green  .node-title { color: #3fb950; }
+
+    .purple { background: #1a0d2e; border: 1px solid #6e40c9; }
+    .purple .node-title { color: #bc8cff; }
+
+    .orange { background: #2a1a00; border: 1px solid #d29922; }
+    .orange .node-title { color: #e3b341; }
+
+    .teal   { background: #0d2626; border: 1px solid #138a8a; }
+    .teal   .node-title { color: #39d3d3; }
+
+    .red    { background: #2a0d0d; border: 1px solid #da3633; }
+    .red    .node-title { color: #f85149; }
+
+    /* ── LangGraph box ── */
+    .langgraph-wrapper {
+      width: 100%;
+      border: 2px dashed #6e40c9;
+      border-radius: 14px;
+      padding: 16px 16px 20px;
+      background: #110d1f;
+      position: relative;
+    }
+
+    .langgraph-label {
+      position: absolute;
+      top: -12px;
+      left: 20px;
+      background: #110d1f;
+      padding: 0 8px;
+      font-size: 11px;
+      font-weight: 700;
+      color: #bc8cff;
+      letter-spacing: 0.5px;
+    }
+
+    .lg-nodes {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0;
+    }
+
+    .lg-node {
+      border-radius: 10px;
+      padding: 14px 18px;
+      text-align: center;
+      flex: 1;
+    }
+
+    .lg-arrow {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      width: 60px;
+      flex-shrink: 0;
+    }
+
+    .lg-arrow-line {
+      height: 2px;
+      width: 36px;
+      background: #30363d;
+    }
+
+    .lg-arrow-head {
+      width: 0;
+      height: 0;
+      border-top: 7px solid transparent;
+      border-bottom: 7px solid transparent;
+      border-left: 9px solid #30363d;
+    }
+
+    .lg-arrow-label {
+      font-size: 9px;
+      color: #8b949e;
+      margin-top: 4px;
+      text-align: center;
+    }
+
+    /* retry arc */
+    .retry-row {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin-top: 10px;
+      gap: 6px;
+    }
+
+    .retry-line {
+      height: 2px;
+      background: #f85149;
+      flex: 1;
+      max-width: 260px;
+    }
+
+    .retry-label {
+      font-size: 10px;
+      color: #f85149;
+      white-space: nowrap;
+    }
+
+    .retry-arrow-left {
+      width: 0; height: 0;
+      border-top: 6px solid transparent;
+      border-bottom: 6px solid transparent;
+      border-right: 8px solid #f85149;
+    }
+
+    /* ── Fan-out ── */
+    .fanout-wrapper {
+      width: 100%;
+      border: 1px solid #238636;
+      border-radius: 14px;
+      padding: 16px;
+      background: #0a1f0a;
+      position: relative;
+    }
+
+    .fanout-label {
+      position: absolute;
+      top: -12px;
+      left: 20px;
+      background: #0a1f0a;
+      padding: 0 8px;
+      font-size: 11px;
+      font-weight: 700;
+      color: #3fb950;
+    }
+
+    .fanout-cols {
+      display: flex;
+      gap: 12px;
+      justify-content: center;
+    }
+
+    .fanout-col {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 0;
+    }
+
+    .repo-node {
+      border-radius: 8px;
+      padding: 10px 14px;
+      text-align: center;
+      width: 100%;
+    }
+
+    .repo-node .node-title { font-size: 12px; }
+    .repo-node .node-sub   { font-size: 10px; }
+
+    .small-arrow {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+    .small-arrow-line  { width: 2px; height: 18px; background: #30363d; }
+    .small-arrow-head  {
+      width: 0; height: 0;
+      border-left: 5px solid transparent;
+      border-right: 5px solid transparent;
+      border-top: 7px solid #30363d;
+    }
+
+    /* ── Badge row at top ── */
+    .badges {
+      display: flex;
+      gap: 10px;
+      justify-content: center;
+      flex-wrap: wrap;
+      margin-bottom: 32px;
+    }
+
+    .badge {
+      font-size: 11px;
+      padding: 4px 12px;
+      border-radius: 20px;
+      font-weight: 600;
+    }
+
+    .badge-blue   { background: #0d2340; border: 1px solid #1f6feb; color: #58a6ff; }
+    .badge-green  { background: #0d2a1a; border: 1px solid #238636; color: #3fb950; }
+    .badge-purple { background: #1a0d2e; border: 1px solid #6e40c9; color: #bc8cff; }
+  </style>
+</head>
+<body>
+
+  <h1>HPE AI-Assisted Dev Pipeline</h1>
+  <p class="subtitle">Jira → LangGraph Agent → Parallel GitHub PRs</p>
+
+  <div class="badges">
+    <span class="badge badge-blue">Jira + Confluence</span>
+    <span class="badge badge-purple">LangGraph · Claude Sonnet + Opus</span>
+    <span class="badge badge-green">Parallel GitHub PRs</span>
+  </div>
+
+  <div class="pipeline">
+
+    <!-- TRIGGER -->
+    <div class="node blue" style="max-width:420px;">
+      <div class="node-title">Jira Automation Trigger</div>
+      <div class="node-sub">Story assigned to <strong style="color:#58a6ff">copilotagentbot@gmail.com</strong><br>
+        JQL: issuetype = Story AND assignee = copilot
+      </div>
+    </div>
+
+    <div class="arrow"><div class="arrow-line"></div><div class="arrow-head"></div></div>
+
+    <!-- WEBHOOK -->
+    <div class="node teal" style="max-width:420px;">
+      <div class="node-title">webhook_server.py  ·  FastAPI + ngrok</div>
+      <div class="node-sub">
+        Validates assignee email · detects service keyword<br>
+        Reads <strong style="color:#39d3d3">service_groups.json</strong> · spawns pipeline subprocess
+      </div>
+    </div>
+
+    <div class="arrow">
+      <div class="arrow-line"></div>
+      <div class="arrow-label">keyword + ticket key</div>
+      <div class="arrow-head"></div>
+    </div>
+
+    <!-- PIPELINE STEPS 1-4 -->
+    <div class="node orange">
+      <div class="node-title">pipeline.py  —  Steps 1 – 4</div>
+      <div class="node-sub">
+        <strong style="color:#e3b341">[1]</strong> Fetch Jira ticket (summary, description, priority)&nbsp;&nbsp;
+        <strong style="color:#e3b341">[2]</strong> Fetch Confluence page(s)&nbsp;&nbsp;
+        <strong style="color:#e3b341">[3]</strong> Detect HTTP method · match repos from service_groups.json&nbsp;&nbsp;
+        <strong style="color:#e3b341">[4]</strong> Build prompt.md (template + ticket + Confluence spec)
+      </div>
+    </div>
+
+    <div class="arrow">
+      <div class="arrow-line"></div>
+      <div class="arrow-label">prompt.md</div>
+      <div class="arrow-head"></div>
+    </div>
+
+    <!-- LANGGRAPH BOX -->
+    <div class="langgraph-wrapper">
+      <span class="langgraph-label">LangGraph Agent Loop  (max 3 iterations)</span>
+
+      <div class="lg-nodes">
+
+        <!-- Generate node -->
+        <div class="lg-node purple">
+          <div class="node-title">Generate</div>
+          <div class="node-sub">
+            Claude Sonnet 4.6<br>
+            reads prompt.md<br>
+            writes app/ files
+          </div>
+        </div>
+
+        <!-- Arrow generate → judge -->
+        <div class="lg-arrow">
+          <div style="display:flex;align-items:center;">
+            <div class="lg-arrow-line"></div>
+            <div class="lg-arrow-head"></div>
+          </div>
+          <div class="lg-arrow-label">generated<br>code</div>
+        </div>
+
+        <!-- Judge node -->
+        <div class="lg-node blue">
+          <div class="node-title">Judge</div>
+          <div class="node-sub">
+            Claude Opus 4.6<br>
+            scores correctness<br>
+            PASS / FAIL + feedback
+          </div>
+        </div>
+
+        <!-- Arrow judge → end -->
+        <div class="lg-arrow">
+          <div style="display:flex;align-items:center;">
+            <div class="lg-arrow-line"></div>
+            <div class="lg-arrow-head"></div>
+          </div>
+          <div class="lg-arrow-label" style="color:#3fb950">PASS →<br>emit code</div>
+        </div>
+
+        <!-- END node -->
+        <div class="lg-node green">
+          <div class="node-title">END</div>
+          <div class="node-sub">
+            final approved<br>
+            generated_solution.md
+          </div>
+        </div>
+
+      </div>
+
+      <!-- Retry arc -->
+      <div class="retry-row">
+        <div class="retry-arrow-left"></div>
+        <div class="retry-line"></div>
+        <div class="retry-label">FAIL → retry with feedback (up to 3×)</div>
+      </div>
+
+    </div>
+
+    <div class="arrow">
+      <div class="arrow-line"></div>
+      <div class="arrow-label">approved code</div>
+      <div class="arrow-head"></div>
+    </div>
+
+    <!-- FAN OUT -->
+    <div class="fanout-wrapper">
+      <span class="fanout-label">asyncio.gather  —  Parallel deployment</span>
+
+      <div class="fanout-cols">
+
+        <!-- API repo -->
+        <div class="fanout-col">
+          <div class="repo-node green">
+            <div class="node-title">API Repo</div>
+            <div class="node-sub">Appointment-Service<br><em>role: api</em></div>
+          </div>
+          <div class="small-arrow"><div class="small-arrow-line"></div><div class="small-arrow-head"></div></div>
+          <div class="repo-node teal">
+            <div class="node-title">create_branch</div>
+            <div class="node-sub">feature/kan-xx-post</div>
+          </div>
+          <div class="small-arrow"><div class="small-arrow-line"></div><div class="small-arrow-head"></div></div>
+          <div class="repo-node teal">
+            <div class="node-title">commit_file</div>
+            <div class="node-sub">prompt.md · app/ · solution.md</div>
+          </div>
+          <div class="small-arrow"><div class="small-arrow-line"></div><div class="small-arrow-head"></div></div>
+          <div class="repo-node blue">
+            <div class="node-title">create_pr</div>
+            <div class="node-sub">→ github.com PR</div>
+          </div>
+        </div>
+
+        <!-- DB repo -->
+        <div class="fanout-col">
+          <div class="repo-node green">
+            <div class="node-title">DB Repo</div>
+            <div class="node-sub">Appointment-Database-Service<br><em>role: database</em></div>
+          </div>
+          <div class="small-arrow"><div class="small-arrow-line"></div><div class="small-arrow-head"></div></div>
+          <div class="repo-node teal">
+            <div class="node-title">create_branch</div>
+            <div class="node-sub">feature/kan-xx-post</div>
+          </div>
+          <div class="small-arrow"><div class="small-arrow-line"></div><div class="small-arrow-head"></div></div>
+          <div class="repo-node teal">
+            <div class="node-title">commit_file</div>
+            <div class="node-sub">prompt.md · app/ · solution.md</div>
+          </div>
+          <div class="small-arrow"><div class="small-arrow-line"></div><div class="small-arrow-head"></div></div>
+          <div class="repo-node blue">
+            <div class="node-title">create_pr</div>
+            <div class="node-sub">→ github.com PR</div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+    <div class="arrow">
+      <div class="arrow-line"></div>
+      <div class="arrow-label">PR URLs</div>
+      <div class="arrow-head"></div>
+    </div>
+
+    <!-- JIRA LINK BACK -->
+    <div class="node blue" style="max-width:420px;">
+      <div class="node-title">Jira Remote Link  +  Status → In Progress</div>
+      <div class="node-sub">
+        POST /rest/api/3/issue/{key}/remotelink<br>
+        Both PR URLs attached to the Jira story
+      </div>
+    </div>
+
+  </div>
+
+</body>
+</html>

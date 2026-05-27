@@ -1,0 +1,43 @@
+# ── Security & Credentials (CRITICAL) ──────────────────────────────────
+.env
+.env*.local
+*.pem
+*.key
+
+# ── Node.js (MCP Servers) ─────────────────────────────────────────────
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+package-lock.json
+
+# ── Python (Orchestrator) ─────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+pip-log.txt
+pip-delete-this-directory.txt
+
+# ── Orchestrator Pipeline Outputs ─────────────────────────────────────
+orchestrator/app/
+orchestrator/prompt.md
+orchestrator/generated_solution.md
+orchestrator/resp*.txt
+orchestrator/judge*.txt
+
+# ── IDEs, OS & Editors ────────────────────────────────────────────────
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.swp
+*~
+.DS_Store
+Thumbs.db
