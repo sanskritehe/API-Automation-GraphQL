@@ -25,7 +25,6 @@ pip-delete-this-directory.txt
 
 # ── Orchestrator Pipeline Outputs ─────────────────────────────────────
 orchestrator/app/
-orchestrator/prompt.md
 orchestrator/generated_solution.md
 orchestrator/resp*.txt
 orchestrator/judge*.txt
