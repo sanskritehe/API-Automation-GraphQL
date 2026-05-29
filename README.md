@@ -1,189 +1,264 @@
 # AI-Assisted API Automation Pipeline
 
-This project is an end-to-end automation pipeline that connects Jira, Confluence, GitHub, and GitHub Models/Copilot-style generation. It reads a Jira ticket, pulls the matching API specification from Confluence, generates implementation code using a model loop, evaluates the generated output, commits the result to one or more GitHub repositories, opens pull requests, and comments the PR links back on the Jira ticket.
+An end-to-end pipeline that takes a Jira ticket, pulls the matching API spec from Confluence, generates FastAPI implementation code using an AI model loop, and opens pull requests in your GitHub repos — then comments the PR links back on the ticket.
 
-The system is designed for FastAPI-style service repositories that follow a layered structure such as:
+It's built for FastAPI services that follow a layered structure:
 
-```text
-routes -> services -> db_client
 ```
-
-It can be tested on additional repositories, but each target repository must be added to the routing configuration and should follow a compatible project structure.
+routes → services → db_client
+```
 
 ---
 
-## What the Pipeline Does
+## How It Works
 
-```mermaid
-graph TD
-    A[Jira ticket created or assigned] --> B[Webhook server or manual CLI run]
-    B --> C[Fetch Jira ticket details]
-    C --> D[Fetch Confluence API specification]
-    D --> E[Detect HTTP method and service keyword]
-    E --> F[Resolve target repositories from service_groups.json]
-    F --> G[Compose runtime prompt.md from method template]
-    G --> H[Run model generation and judge loop]
-    H --> I[Write generated files into orchestrator/app]
-    I --> J[Create feature branch in each target repo]
-    J --> K[Commit prompt.md, generated_solution.md, and app files]
-    K --> L[Open pull request]
-    L --> M[Comment PR links on Jira]
-```
+1. A Jira ticket is assigned to the automation user
+2. The webhook server picks it up (or you run the pipeline manually)
+3. The pipeline fetches the ticket details and the API spec from Confluence
+4. It detects the HTTP method and service name from the ticket text
+5. It picks the right GitHub repos from `service_groups.json`
+6. It builds a `prompt.md` from the method template + ticket + spec, then runs a generate → judge loop
+7. It creates a branch, commits the generated files, and opens a PR in each matched repo
+8. It posts the PR links as a comment on the Jira ticket
 
 ---
 
 ## Project Structure
 
-```text
+```
 MCP/
-|-- jira-mcp-server/          Node.js MCP server for Jira tools
-|-- confluence-mcp-server/    Node.js MCP server for Confluence tools
-|-- github-mcp-server/        Node.js MCP server for GitHub tools
-|-- orchestrator/             Core Python automation pipeline
-|   |-- pipeline.py           Full end-to-end pipeline entry point
-|   |-- orchestrator.py       Model generation and judging loop
-|   |-- webhook_server.py     FastAPI Jira webhook listener
-|   |-- service_groups.json   Maps service keywords to GitHub repositories
-|   |-- api_clients/          Jira, Confluence, and GitHub REST clients
-|   |-- prompts/              Optional local prompt templates/reference prompts
-|   |-- app/                  Working app folder where generated code is written
-|   |-- requirements.txt      Python dependencies
-|-- pipeline-run-instructions.md
-|-- pipeline_visual.html
-|-- langgraph_visual.html
-|-- README.md
+├── jira-mcp-server/           Node.js MCP server for Jira
+├── confluence-mcp-server/     Node.js MCP server for Confluence
+├── github-mcp-server/         Node.js MCP server for GitHub
+└── orchestrator/
+    ├── pipeline.py            Main entry point — runs the full pipeline
+    ├── orchestrator.py        Generation + judge loop only
+    ├── webhook_server.py      FastAPI webhook listener for Jira events
+    ├── service_groups.json    Maps service keywords → GitHub repos
+    ├── api_clients/
+    │   ├── jira.py
+    │   ├── confluence.py
+    │   └── github.py
+    ├── prompts/               Local fallback prompt templates (GET/POST/etc.)
+    ├── app/                   Where generated code gets written
+    ├── .env                   All credentials go here
+    └── requirements.txt
 ```
 
 ---
 
-## Requirements
+## Prerequisites
 
 - Python 3.10+
 - Node.js 18+
 - npm
-- GitHub personal access token with repository permissions
-- Jira API token
-- Confluence API token
-- Access to GitHub Models using the configured GitHub token
-- Optional: GitHub CLI authenticated with `gh auth login` as a fallback token source
-- Optional: ngrok or another HTTPS tunnel for live Jira webhooks
+- [ngrok](https://ngrok.com) account (free tier works) — only needed for the webhook
+
+### Credentials You'll Need
+
+Before setting up the `.env`, make sure you have the following ready:
+
+**Jira**
+- Your Jira domain: `https://your-org.atlassian.net`
+- Your Jira account email
+- A Jira API token → [generate one here](https://id.atlassian.com/manage-profile/security/api-tokens)
+
+**Confluence**
+- Same domain and email as Jira (usually)
+- A Confluence API token (can be the same token)
+- The space key for your Confluence space — visible in the URL: `.../wiki/spaces/SPACEKEY`
+- The exact title of the page that contains your API spec
+
+**GitHub**
+- A personal access token with `repo` and `workflow` scopes → [generate here](https://github.com/settings/tokens)
+- Your GitHub org or username
+
+**AI Model — pick one**
+
+| Option | Where to get the key | Notes |
+|--------|----------------------|-------|
+| Groq (recommended) | [console.groq.com](https://console.groq.com) | Free tier, fast |
+| OpenAI | [platform.openai.com](https://platform.openai.com/api-keys) | Requires paid plan |
 
 ---
 
-## Environment Configuration
+## Setup
 
-Create an `.env` file inside `orchestrator/`.
-
-```ini
-# Jira
-JIRA_DOMAIN=https://your-org.atlassian.net
-JIRA_EMAIL=your-email@example.com
-JIRA_API_TOKEN=your_jira_api_token
-
-# Confluence
-CONFLUENCE_DOMAIN=https://your-org.atlassian.net
-CONFLUENCE_EMAIL=your-email@example.com
-CONFLUENCE_API_TOKEN=your_confluence_api_token
-CONFLUENCE_SPACE=~71202046a5693ef7834f62afe3bad6ad83fef8
-CONFLUENCE_PAGE=API-Based Automation Platform
-
-# GitHub
-GITHUB_TOKEN=your_github_personal_access_token
-GITHUB_OWNER=your_github_username_or_org
-BASE_BRANCH=main
-
-# Prompt templates fetched from GitHub
-PROMPTS_REPO=sanskritehe/Appointment-Service
-PROMPTS_BRANCH=main
-
-# Model configuration
-GENERATOR_MODEL=gpt-4o
-JUDGE_MODEL=gpt-4o
-
-# Optional webhook filter
-COPILOT_ASSIGNEE=copilotagentbot@gmail.com
-```
-
-The Node.js MCP servers can also use their own `.env` files:
-
-```text
-jira-mcp-server/.env
-  JIRA_DOMAIN
-  JIRA_EMAIL
-  JIRA_API_TOKEN
-
-confluence-mcp-server/.env
-  CONFLUENCE_DOMAIN
-  CONFLUENCE_EMAIL
-  CONFLUENCE_API_TOKEN
-
-github-mcp-server/.env
-  GITHUB_TOKEN
-  GITHUB_OWNER
-```
-
----
-
-## Install Dependencies
-
-Install Node dependencies for each MCP server:
+### 1. Install Node dependencies
 
 ```bash
-cd jira-mcp-server
-npm install
-
-cd ../confluence-mcp-server
-npm install
-
-cd ../github-mcp-server
-npm install
+cd jira-mcp-server && npm install
+cd ../confluence-mcp-server && npm install
+cd ../github-mcp-server && npm install
 ```
 
-Install Python dependencies for the orchestrator:
+### 2. Install Python dependencies
 
 ```bash
 cd ../orchestrator
 pip install -r requirements.txt
 ```
 
+### 3. Create the `.env` file
+
+Create `orchestrator/.env` and fill in your credentials:
+
+```dotenv
+# ── Jira ──────────────────────────────────────────────────────────────
+JIRA_DOMAIN=https://your-org.atlassian.net
+JIRA_EMAIL=your-email@company.com
+JIRA_API_TOKEN=your_jira_api_token
+
+# ── Confluence ────────────────────────────────────────────────────────
+CONFLUENCE_DOMAIN=https://your-org.atlassian.net
+CONFLUENCE_EMAIL=your-email@company.com
+CONFLUENCE_API_TOKEN=your_confluence_api_token
+CONFLUENCE_SPACE=~your_confluence_space_key
+CONFLUENCE_PAGE=Your API Spec Page Title
+
+# ── GitHub ────────────────────────────────────────────────────────────
+GITHUB_TOKEN=ghp_your_token_here
+GITHUB_OWNER=your-org-or-username
+BASE_BRANCH=main
+
+# ── Prompt templates (fetched from GitHub at runtime) ─────────────────
+PROMPTS_REPO=your-org/your-repo
+PROMPTS_BRANCH=main
+
+# ── AI model ──────────────────────────────────────────────────────────
+# Groq:
+GROQ_API_KEY=gsk_your_groq_key
+GENERATOR_MODEL=llama-3.3-70b-versatile
+JUDGE_MODEL=llama-3.3-70b-versatile
+
+# OpenAI (alternative):
+# OPENAI_API_KEY=sk-proj-your_key
+# GENERATOR_MODEL=gpt-3.5-turbo
+# JUDGE_MODEL=gpt-3.5-turbo
+
+# ── Webhook filter (optional) ─────────────────────────────────────────
+# Only trigger the pipeline when a ticket is assigned to this user.
+# Leave empty to trigger on any assignment.
+COPILOT_ASSIGNEE=automation-bot@company.com
+```
+
 ---
 
-## Repository Routing
+## Connecting to Your Codebase
 
-The pipeline does not use a `--repo` command-line argument. Repositories are selected through `orchestrator/service_groups.json`.
-
-Example:
+The pipeline routes tickets to repos using `orchestrator/service_groups.json`. Each entry maps a keyword (detected from the ticket text) to one or more GitHub repos.
 
 ```json
 {
   "appointment": [
     {
-      "repo": "sanskritehe/Appointment-Service",
+      "repo": "your-org/Appointment-Service",
       "role": "api",
       "operations": ["GET", "POST", "PUT", "PATCH", "DELETE"]
     },
     {
-      "repo": "sanskritehe/Appointment-Database-Service",
+      "repo": "your-org/Appointment-DB-Service",
       "role": "database",
       "operations": ["GET", "POST", "PUT", "PATCH", "DELETE"]
+    }
+  ],
+  "patient": [
+    {
+      "repo": "your-org/Patient-Service",
+      "role": "api",
+      "operations": ["GET", "POST", "PUT", "PATCH"]
     }
   ]
 }
 ```
 
-How routing works:
+To add a new service:
 
-1. The pipeline reads the Jira ticket summary and description.
-2. It detects the HTTP method from words like `GET`, `POST`, `create`, `update`, `delete`, or `fetch`.
-3. It detects a service keyword such as `appointment`, `patient`, or `billing`.
-4. It selects repositories from `service_groups.json` where both the keyword and HTTP method match.
-5. It opens one PR per matched repository.
+1. Add an entry to `service_groups.json` with a keyword and target repo(s)
+2. Make sure the GitHub token has push access to those repos
+3. Confirm the repos follow the `routes → services → db_client` structure (or update the prompt templates to match your structure)
+
+The keyword is auto-detected from the Jira ticket text. If detection fails, you can pass it manually with `--keyword`.
+
+---
+
+## Running the Pipeline
+
+### Manual run
+
+```bash
+cd orchestrator
+
+python pipeline.py \
+  --ticket KAN-1 \
+  --confluence-space ~your_space_key \
+  --confluence-page "Your API Spec Page Title" \
+  --keyword appointment \
+  --base-branch main
+```
+
+### Test generation only (no GitHub, no Jira)
+
+If `prompt.md` already exists in `orchestrator/`, you can test just the AI loop:
+
+```bash
+cd orchestrator
+python orchestrator.py
+```
+
+Outputs: `generated_solution.md` and `app/`
+
+---
+
+## Running the Webhook Server
+
+The webhook server listens for Jira issue updates and triggers the pipeline automatically when a ticket is assigned.
+
+### 1. Start the server
+
+```bash
+cd orchestrator
+python webhook_server.py
+```
+
+It runs on `http://localhost:8000`. Check it's up:
+
+```bash
+curl http://localhost:8000/health
+# → {"status": "ok"}
+```
+
+### 2. Expose it with ngrok
+
+In a separate terminal:
+
+```bash
+ngrok http 8000
+```
+
+Copy the HTTPS URL it gives you — something like `https://abcd-1234.ngrok-free.app`.
+
+### 3. Register the webhook in Jira
+
+1. Go to **Jira Settings → System → Webhooks**
+2. Create a new webhook
+3. Set the URL to `https://your-ngrok-url.ngrok-free.app/webhook`
+4. Select the **Issue updated** event
+5. Save
+
+### 4. Trigger it
+
+Assign a Jira ticket to the user set in `COPILOT_ASSIGNEE` (or any user if that's left empty). The ticket summary or description must contain a keyword from `service_groups.json`.
+
+The terminal running `webhook_server.py` will show the full pipeline progress.
+
+---
 
 ## Prompt Templates
 
-The pipeline uses method-specific prompt templates. After detecting the HTTP method, `pipeline.py` fetches:
+The pipeline fetches method-specific templates from the repo set in `PROMPTS_REPO`:
 
-```text
+```
 prompts/GET.md
 prompts/POST.md
 prompts/PUT.md
@@ -191,326 +266,55 @@ prompts/PATCH.md
 prompts/DELETE.md
 ```
 
-from the GitHub repository configured by:
+It combines the right template with the live Jira ticket data and Confluence spec to build `prompt.md` at runtime. If the remote fetch fails, it falls back to a basic built-in template.
 
-```ini
-PROMPTS_REPO=sanskritehe/Appointment-Service
-PROMPTS_BRANCH=main
-```
-
-Then it creates a runtime `prompt.md` by combining:
-
-1. The selected method template, such as `POST.md`.
-2. The live Jira ticket summary, description, labels, priority, and URL.
-3. The live Confluence API specification.
-
-So `prompt.md` is not replacing the GET/POST/PUT/DELETE prompt files. It is the final generated context file created from the correct method prompt plus the current ticket and API spec.
-
-If the configured GitHub prompt file cannot be fetched, the pipeline falls back to a basic generic template for that HTTP method.
-
-You can override keyword detection manually:
-
-```bash
-python pipeline.py \
-  --ticket KAN-1 \
-  --confluence-space hpe-team2 \
-  --confluence-page "Appointment Service API Spec" \
-  --keyword appointment
-```
+You can override or customize templates by editing the files in your `PROMPTS_REPO`.
 
 ---
 
-## Testing on a New Repository
+## Troubleshooting
 
-To test this automation on a repository that was not used during development:
+**`ignored: no assignee set`** — Assign the ticket before triggering the webhook.
 
-1. Add the repository to `orchestrator/service_groups.json`.
-2. Choose a keyword that will appear in the Jira ticket, or pass it manually using `--keyword`.
-3. Confirm the repository base branch, usually `main`.
-4. Confirm the GitHub token has permission to create branches, commit files, and open PRs.
-5. Confirm the repository structure is compatible with the generated FastAPI layout.
-6. Run the pipeline from the `orchestrator` folder.
+**`ignored: assignee is not the copilot agent`** — Either update `COPILOT_ASSIGNEE` in `.env` or assign the ticket to the configured automation user.
 
-Example new repo entry:
+**`ignored: no matching service keyword found`** — Add the service keyword to `service_groups.json`, or pass `--keyword your-keyword` manually.
 
-```json
-{
-  "inventory": [
-    {
-      "repo": "your-org/Inventory-Service",
-      "role": "api",
-      "operations": ["GET", "POST", "PUT", "PATCH", "DELETE"]
-    }
-  ]
-}
-```
+**`404` on Confluence** — Double-check the space key and page title (case-sensitive). You can find the space key in the Confluence URL: `.../wiki/spaces/SPACEKEY`.
 
-Example run:
+**GitHub auth errors** — Regenerate your token at https://github.com/settings/tokens. It needs `repo` and `workflow` scopes.
 
-```bash
-cd orchestrator
-python pipeline.py \
-  --ticket KAN-25 \
-  --confluence-space hpe-team2 \
-  --confluence-page "Inventory Service API Spec" \
-  --keyword inventory \
-  --base-branch main
-```
+**ngrok URL expired** — Free ngrok URLs change on restart. Update the Jira webhook URL whenever you restart ngrok.
 
-Important limitation: the generation loop reads and writes code through the local `orchestrator/app` folder. If the new target repository has a very different structure, the PR may still be created, but the generated files may need manual adjustment.
+**Generated code doesn't match your repo structure** — Update the prompt templates in `PROMPTS_REPO` to reflect your architecture, or manually adjust the generated PR.
 
 ---
 
-## Run the Full Pipeline Manually
+## Claude Desktop (Optional — for manual tool testing)
 
-From the `orchestrator` directory:
+You can register the MCP servers with Claude Desktop to test Jira/Confluence/GitHub tools manually.
 
-```bash
-python pipeline.py \
-  --ticket KAN-1 \
-  --confluence-space hpe-team2 \
-  --confluence-page "Appointment Service API Spec" \
-  --keyword appointment \
-  --base-branch main
-```
-
-The pipeline will:
-
-1. Fetch the Jira ticket.
-2. Fetch the Confluence API specification.
-3. Detect the HTTP method.
-4. Resolve target repositories from `service_groups.json`.
-5. Build `prompt.md`.
-6. Run the generation and judge loop up to three times.
-7. Save `generated_solution.md`.
-8. Create a feature branch in each target repository.
-9. Commit generated files.
-10. Open pull requests.
-11. Add the PR links as a Jira comment.
-
----
-
-## Run Only the Generation Loop
-
-Use this mode when `prompt.md` already exists in the `orchestrator` directory and you only want to test generation locally.
-
-```bash
-cd orchestrator
-python orchestrator.py
-```
-
-Outputs:
-
-```text
-orchestrator/generated_solution.md
-orchestrator/app/
-```
-
----
-
-## Run the Jira Webhook Server
-
-The webhook server listens for Jira issue update events and triggers the full pipeline when a ticket is assigned to the configured automation user.
-
-### 1. Configure webhook environment values
-
-In `orchestrator/.env`, set the default Confluence page and base branch that webhook-triggered runs should use:
-
-```ini
-CONFLUENCE_SPACE=hpe-team2
-CONFLUENCE_PAGE=Appointment Service API Spec
-BASE_BRANCH=main
-```
-
-Optionally restrict automation to one Jira assignee:
-
-```ini
-COPILOT_ASSIGNEE=copilotagentbot@gmail.com
-```
-
-If `COPILOT_ASSIGNEE` is set, the webhook ignores Jira updates unless the issue assignee email or display name matches this value. If it is empty, the webhook accepts assigned issues as long as it can resolve a service keyword.
-
-### 2. Start the local webhook server
-
-```bash
-cd orchestrator
-python webhook_server.py
-```
-
-The server runs on:
-
-```text
-http://localhost:8000
-```
-
-Health check:
-
-```text
-http://localhost:8000/health
-```
-
-Open the health URL in a browser or call it from a terminal. Expected response:
-
-```json
-{"status":"ok"}
-```
-
-### 3. Expose the local server with ngrok
-
-Jira needs a public HTTPS URL. Keep the webhook server running, then start ngrok in another terminal:
-
-```bash
-ngrok http 8000
-```
-
-Copy the HTTPS forwarding URL from ngrok and append `/webhook`.
-
-```text
-https://your-ngrok-url.ngrok-free.app/webhook
-```
-
-### 4. Create the Jira webhook
-
-In Jira or Atlassian admin:
-
-1. Go to system settings or Jira settings.
-2. Open Webhooks.
-3. Create a new webhook.
-4. Set the webhook URL to the ngrok URL ending in `/webhook`.
-5. Select the `Issue updated` event.
-6. Save the webhook.
-
-Recommended event:
-
-```text
-Issue updated
-```
-
-### 5. Trigger the automation
-
-Update a Jira issue so that:
-
-1. The issue has an assignee.
-2. If `COPILOT_ASSIGNEE` is configured, the assignee matches it.
-3. The summary or description contains a service keyword from `orchestrator/service_groups.json`, such as `appointment`, `patient`, or `billing`.
-
-When the webhook receives a valid event, it runs:
-
-```bash
-python pipeline.py \
-  --ticket <ISSUE-KEY> \
-  --confluence-space <CONFLUENCE_SPACE> \
-  --confluence-page <CONFLUENCE_PAGE> \
-  --keyword <detected-keyword> \
-  --base-branch <BASE_BRANCH>
-```
-
-The server response includes the detected ticket, keyword, and target repositories. The terminal running `webhook_server.py` shows the full pipeline progress.
-
-### 6. Common webhook issues
-
-- `ignored: no assignee set`: assign the Jira issue before triggering the webhook.
-- `ignored: assignee is not the copilot agent`: update `COPILOT_ASSIGNEE` or assign the issue to the configured automation user.
-- `ignored: no matching service keyword found`: add a keyword to the Jira ticket text or add the service to `service_groups.json`.
-- Ngrok URL changed: update the Jira webhook URL with the new ngrok forwarding URL.
-
----
-
-## Claude Desktop MCP Setup
-
-The MCP servers can also be registered with Claude Desktop for manual tool-based testing.
-
-Claude config path:
-
-```text
-Windows: %APPDATA%\Claude\claude_desktop_config.json
-macOS: ~/Library/Application Support/Claude/claude_desktop_config.json
-```
-
-Example:
+Config file location:
+- **Windows**: `%APPDATA%\Claude\claude_desktop_config.json`
+- **macOS**: `~/Library/Application Support/Claude/claude_desktop_config.json`
 
 ```json
 {
   "mcpServers": {
     "jira": {
       "command": "node",
-      "args": ["C:/Users/Admin/Desktop/MCP SEND/MCP_Final/MCP/jira-mcp-server/server.js"]
+      "args": ["/absolute/path/to/MCP/jira-mcp-server/server.js"]
     },
     "confluence": {
       "command": "node",
-      "args": ["C:/Users/Admin/Desktop/MCP SEND/MCP_Final/MCP/confluence-mcp-server/server.js"]
+      "args": ["/absolute/path/to/MCP/confluence-mcp-server/server.js"]
     },
     "github": {
       "command": "node",
-      "args": ["C:/Users/Admin/Desktop/MCP SEND/MCP_Final/MCP/github-mcp-server/server.js"]
+      "args": ["/absolute/path/to/MCP/github-mcp-server/server.js"]
     }
   }
 }
 ```
 
-Restart Claude Desktop after editing this file.
-
----
-
-## Troubleshooting
-
-### No repository matched
-
-Cause: the ticket text did not contain a keyword from `service_groups.json`, or the detected HTTP method is not allowed for that repo.
-
-Fix:
-
-```bash
-python pipeline.py ... --keyword appointment
-```
-
-Also confirm that the repo entry includes the detected operation:
-
-```json
-"operations": ["GET", "POST", "PUT", "PATCH", "DELETE"]
-```
-
-### GitHub authentication errors
-
-Cause: missing, expired, or under-scoped GitHub token.
-
-Fix:
-
-```bash
-gh auth login
-```
-
-Or update:
-
-```ini
-GITHUB_TOKEN=your_valid_token
-```
-
-The token must be able to create branches, write files, and open pull requests.
-
-### Confluence page not found
-
-Cause: incorrect space key, page title, or token permissions.
-
-Fix: verify the exact Confluence space key and page title, then rerun with:
-
-```bash
-python pipeline.py --confluence-space hpe-team2 --confluence-page "Exact Page Title" ...
-```
-
-### Generated files do not fit the target repo
-
-Cause: the target repo has a different architecture than the FastAPI layered structure expected by the prompt.
-
-Fix: update the prompt template, update `orchestrator/app` to mirror the target repo structure, or manually adjust the generated PR.
-
----
-
-## Current Design Notes
-
-- `pipeline.py` is the main end-to-end runner.
-- `orchestrator.py` performs generation and judging.
-- `service_groups.json` controls multi-repo fan-out.
-- `webhook_server.py` triggers the same pipeline from Jira webhooks.
-- The generated branch name includes the ticket key, method, and timestamp.
-- The model judge checks API implementation quality only. GitHub branch, commit, and PR operations are handled separately by the pipeline.
+Restart Claude Desktop after saving.
