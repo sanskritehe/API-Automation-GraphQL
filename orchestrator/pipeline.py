@@ -21,6 +21,9 @@ import argparse
 import asyncio
 import json
 import os
+import shutil
+import subprocess
+import sys
 from datetime import datetime
 
 from dotenv import load_dotenv
@@ -64,13 +67,21 @@ def match_repos(groups: dict, keyword: str, method: str) -> list[dict]:
 
 
 def detect_http_method(ticket: dict) -> str:
-    """Detect GET/POST/PUT/PATCH/DELETE from ticket text. Defaults to POST."""
+    """Detect GET/POST/PUT/PATCH/DELETE or QUERY/MUTATION from ticket text. Defaults to POST."""
     text = f"{ticket['summary']} {ticket['description']}".lower()
-    # Literal method name is the most reliable signal — check first
+    
+    # 1. Check for GraphQL specific operations first
+    if "graphql query" in text:
+        return "QUERY"
+    if "graphql mutation" in text:
+        return "MUTATION"
+        
+    # 2. Literal method name check
     for method in ["PATCH", "DELETE", "PUT", "POST", "GET"]:
         if method.lower() in text:
             return method
-    # Fall back to semantic keywords
+            
+    # 3. Semantic keywords check
     for method in ["PATCH", "DELETE", "PUT", "POST", "GET"]:
         if any(kw in text for kw in _METHOD_KEYWORDS.get(method, [])):
             return method
@@ -90,8 +101,19 @@ def detect_service_keyword(ticket: dict, groups: dict) -> str | None:
 
 
 def fetch_prompt_template(method: str) -> str:
-    """Fetch the action-specific prompt template from GitHub."""
+    """Fetch the action-specific prompt template from local prompts/ or GitHub."""
     path = f"prompts/{method}.md"
+    
+    # Try local first
+    local_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "prompts", f"{method}.md")
+    if os.path.exists(local_path):
+        print(f"  Using local template: {local_path}")
+        try:
+            with open(local_path, "r", encoding="utf-8") as f:
+                return f.read()
+        except Exception as e:
+            print(f"  Warning: could not read local template {local_path} ({e}).")
+
     print(f"  Fetching template: {PROMPTS_REPO}/{path}")
     try:
         return get_file(PROMPTS_REPO, path, PROMPTS_BRANCH)
@@ -169,23 +191,45 @@ async def deploy_to_repo(
         branch=feature_branch,
     ))
 
-    # Commit all app/ source files
-    for root, _, files in os.walk(app_dir):
-        for filename in files:
-            if filename.endswith(".pyc") or "__pycache__" in root:
-                continue
-            abs_path = os.path.join(root, filename)
-            rel_path = os.path.relpath(abs_path, os.path.dirname(app_dir)).replace("\\", "/")
-            with open(abs_path, "r", encoding="utf-8") as f:
-                file_content = f.read()
-            await loop.run_in_executor(None, lambda rp=rel_path, fc=file_content: commit_file(
-                repo=repo,
-                path=rp,
-                content=fc,
-                message=f"feat: add {rp} for {ticket['key']}",
-                branch=feature_branch,
-            ))
-            print(f"    [{role}] Committed {rel_path}")
+    # Commit all relevant files based on role
+    if role in ["api", "database", "gateway"]:
+        # api, database, gateway roles: Only commit files from orchestrator/app/app/ to app/
+        actual_app_dir = os.path.join(app_dir, "app")
+        for root, _, files in os.walk(actual_app_dir):
+            for filename in files:
+                if filename.endswith(".pyc") or "__pycache__" in root:
+                    continue
+                abs_path = os.path.join(root, filename)
+                rel_path = os.path.relpath(abs_path, app_dir).replace("\\", "/")
+                with open(abs_path, "r", encoding="utf-8") as f:
+                    file_content = f.read()
+                await loop.run_in_executor(None, lambda rp=rel_path, fc=file_content: commit_file(
+                    repo=repo,
+                    path=rp,
+                    content=fc,
+                    message=f"feat: add {rp} for {ticket['key']}",
+                    branch=feature_branch,
+                ))
+                print(f"    [{role}] Committed {rel_path}")
+    elif role == "graphql":
+        # graphql role: Only commit the staged .graphql schemas at the root of the repository
+        graphql_files = ["supergraph.graphql", "appointment-service.graphql", "appointment-db-service.graphql"]
+        orchestrator_dir = os.path.dirname(app_dir)
+        for filename in graphql_files:
+            abs_path = os.path.join(orchestrator_dir, filename)
+            if os.path.exists(abs_path):
+                with open(abs_path, "r", encoding="utf-8") as f:
+                    file_content = f.read()
+                await loop.run_in_executor(None, lambda rp=filename, fc=file_content: commit_file(
+                    repo=repo,
+                    path=rp,
+                    content=fc,
+                    message=f"feat: add {rp} for {ticket['key']}",
+                    branch=feature_branch,
+                ))
+                print(f"    [{role}] Committed {filename}")
+            else:
+                print(f"    [{role}] Warning: {filename} not found at {abs_path}, skipping.")
 
     # Open PR
     pr_url = await loop.run_in_executor(None, lambda: create_pr(
@@ -288,6 +332,72 @@ async def main():
     print("  Saved generated_solution.md locally")
 
     # ------------------------------------------------------------------
+    # Step 5.5: Sync generated code, run compose.py, and copy schemas back
+    # ------------------------------------------------------------------
+    print("\n[5.5/6] Syncing generated files and composing GraphQL schemas...")
+    orchestrator_dir = os.path.dirname(os.path.abspath(__file__))
+    workspace_dir = os.path.abspath(os.path.join(orchestrator_dir, "..", ".."))
+    src_app = os.path.join(orchestrator_dir, "app", "app")
+
+    # 1. Sync generated code to sibling folders matching the active service group
+    active_repos = groups.get(keyword.lower(), [])
+    for r in active_repos:
+        role = r.get("role")
+        repo_path = r.get("repo")
+        if role in ["api", "database", "gateway"]:
+            dir_name = repo_path.split("/")[-1]
+            dst_app = os.path.join(workspace_dir, dir_name, "app")
+            if os.path.exists(os.path.dirname(dst_app)):
+                print(f"  Syncing app/ to {dir_name}...")
+                def copy_recursive(src, dst):
+                    if not os.path.exists(dst):
+                        os.makedirs(dst)
+                    for item in os.listdir(src):
+                        s = os.path.join(src, item)
+                        d = os.path.join(dst, item)
+                        if os.path.isdir(s):
+                            if item == "__pycache__":
+                                continue
+                            copy_recursive(s, d)
+                        else:
+                            shutil.copy2(s, d)
+                copy_recursive(src_app, dst_app)
+
+    # 2. Find and run compose.py in graphql-datagraph repository if configured
+    graphql_repo_cfg = next((r for r in active_repos if r.get("role") == "graphql"), None)
+    if graphql_repo_cfg:
+        dir_name = graphql_repo_cfg["repo"].split("/")[-1]
+        compose_py = os.path.join(workspace_dir, dir_name, "compose.py")
+        if os.path.exists(compose_py):
+            print("  Running compose.py to compile GraphQL schemas...")
+            res = subprocess.run(
+                [sys.executable, compose_py],
+                cwd=os.path.dirname(compose_py),
+                capture_output=True,
+                text=True
+            )
+            if res.returncode != 0:
+                print("  Error running compose.py:")
+                print(res.stdout)
+                print(res.stderr)
+                raise SystemExit("Schema composition failed.")
+            else:
+                print("  compose.py output:")
+                print(res.stdout)
+
+            # 3. Copy composed graphql files back to orchestrator directory for deployment staging
+            graphql_files = ["supergraph.graphql", "appointment-service.graphql", "appointment-db-service.graphql"]
+            graphql_dir = os.path.dirname(compose_py)
+            for gfile in graphql_files:
+                src_gfile = os.path.join(graphql_dir, gfile)
+                dst_gfile = os.path.join(orchestrator_dir, gfile)
+                if os.path.exists(src_gfile):
+                    shutil.copy2(src_gfile, dst_gfile)
+                    print(f"  Staged {gfile} to orchestrator directory.")
+                else:
+                    print(f"  Warning: Expected GraphQL file {src_gfile} not found.")
+
+    # ------------------------------------------------------------------
     # Step 6: Fan out — parallel branch + commit + PR across all target repos
     # ------------------------------------------------------------------
     print(f"\n[6/6] Opening PRs in parallel across {len(target_repos)} repo(s)...")
@@ -308,7 +418,7 @@ async def main():
     print("\n============================================")
     print(f"[+] Pipeline complete! {len(results)} PR(s) opened:")
     for res in results:
-        print(f"    [{res['role']}] {res['repo']} → {res['pr_url']}")
+        print(f"    [{res['role']}] {res['repo']} -> {res['pr_url']}")
     print("============================================\n")
 
     # Post a comment on the Jira ticket with all PR links

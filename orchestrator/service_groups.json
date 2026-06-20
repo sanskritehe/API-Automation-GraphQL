@@ -1,7 +1,9 @@
 {
   "appointment": [
-    {"repo": "sanskritehe/Appointment-Service", "role": "api",      "operations": ["GET","POST","PUT","PATCH","DELETE"]},
-    {"repo": "sanskritehe/Appointment-Database-Service", "role": "database", "operations": ["GET","POST","PUT","PATCH","DELETE"]}
+    {"repo": "sanskritehe/Appointment-Service", "role": "api",      "operations": ["GET","POST","PUT","PATCH","DELETE","QUERY","MUTATION"]},
+    {"repo": "sanskritehe/Appointment-Database-Service", "role": "database", "operations": ["GET","POST","PUT","PATCH","DELETE","QUERY","MUTATION"]},
+    {"repo": "sanskritehe/rest-api-gateway", "role": "gateway", "operations": ["GET","POST","PUT","PATCH","DELETE","QUERY","MUTATION"]},
+    {"repo": "sanskritehe/graphql-datagraph", "role": "graphql", "operations": ["QUERY","MUTATION"]}
   ],
   "patient": [
     {"repo": "sanskritehe/Patient-Service", "role": "api",      "operations": ["GET","POST","PUT","DELETE"]}
