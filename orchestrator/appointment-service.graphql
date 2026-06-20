@@ -1,0 +1,19 @@
+type Appointment {
+  id: Int!
+  user: String!
+  time: String!
+  status: String!
+}
+
+type AppointmentStorage {
+  id: Int!
+  user: String!
+  time: String!
+  status: String!
+}
+
+type Query {
+  appointmentRecord(id: Int!): AppointmentStorage
+  appointment(id: Int!): Appointment
+  appointmentById(id: Int!): Appointment
+}
