@@ -11,6 +11,9 @@ import argparse
 import asyncio
 import json
 import os
+import shutil
+import subprocess
+import tempfile
 from datetime import datetime
 
 from dotenv import load_dotenv
@@ -200,6 +203,94 @@ async def commit_and_pr(
 
 
 # ---------------------------------------------------------------------------
+# Phase 4 — clone datagraph repo, run rover supergraph compose, commit result
+# ---------------------------------------------------------------------------
+
+async def compose_supergraph(
+    datagraph_repo: str,
+    feature_branch: str,
+    base_branch: str,
+    ticket_key: str,
+) -> bool:
+    """
+    Clone the datagraph feature branch, run `rover supergraph compose`, and
+    commit the regenerated supergraph.graphql back to the feature branch.
+
+    Returns True on success, False if rover is missing or compose fails.
+    The datagraph repo's supergraph.yaml must list the running subgraph URLs
+    (rover introspects them live), so services need to be reachable.
+    """
+    token = os.environ.get("GITHUB_TOKEN", "")
+    clone_url = f"https://x-access-token:{token}@github.com/{datagraph_repo}.git"
+    tmp_dir = tempfile.mkdtemp(prefix="datagraph-compose-")
+
+    try:
+        # Clone feature branch; fall back to base branch if it doesn't exist yet
+        clone_result = subprocess.run(
+            ["git", "clone", "--branch", feature_branch, "--depth", "1", clone_url, tmp_dir],
+            capture_output=True, text=True,
+        )
+        if clone_result.returncode != 0:
+            print(f"  [datagraph] Feature branch '{feature_branch}' not found, cloning '{base_branch}'...")
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+            tmp_dir = tempfile.mkdtemp(prefix="datagraph-compose-")
+            subprocess.run(
+                ["git", "clone", "--branch", base_branch, "--depth", "1", clone_url, tmp_dir],
+                capture_output=True, text=True, check=True,
+            )
+
+        # Check rover is available
+        rover_check = subprocess.run(
+            ["rover", "--version"], capture_output=True, text=True,
+        )
+        if rover_check.returncode != 0:
+            print("  [datagraph] WARNING: 'rover' CLI not found — skipping supergraph compose.")
+            print("             Install from https://www.apollographql.com/docs/rover/getting-started/")
+            print(f"             Then run: cd <datagraph-repo> && bash compose.sh")
+            return False
+
+        supergraph_yaml = os.path.join(tmp_dir, "supergraph.yaml")
+        if not os.path.exists(supergraph_yaml):
+            print("  [datagraph] WARNING: supergraph.yaml not found in datagraph repo — skipping compose.")
+            return False
+
+        print(f"  [datagraph] Running: rover supergraph compose --config supergraph.yaml")
+        compose_result = subprocess.run(
+            ["rover", "supergraph", "compose", "--config", "supergraph.yaml"],
+            cwd=tmp_dir,
+            capture_output=True,
+            text=True,
+        )
+
+        if compose_result.returncode != 0:
+            print(f"  [datagraph] rover compose failed (subgraph services may not be running):")
+            print(f"             {compose_result.stderr.strip()}")
+            print(f"             compose.sh has been committed — run it manually once services are up.")
+            return False
+
+        supergraph_content = compose_result.stdout
+        print(f"  [datagraph] Compose succeeded — {len(supergraph_content)} chars generated.")
+
+        # Commit supergraph.graphql to the feature branch
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, lambda: commit_file(
+            repo=datagraph_repo,
+            path="supergraph.graphql",
+            content=supergraph_content,
+            message=f"feat: regenerate supergraph.graphql for {ticket_key}",
+            branch=feature_branch,
+        ))
+        print(f"  [datagraph] supergraph.graphql committed to '{feature_branch}'.")
+        return True
+
+    except subprocess.CalledProcessError as e:
+        print(f"  [datagraph] Compose step failed: {e}")
+        return False
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -305,14 +396,38 @@ async def main():
         for r, gen in zip(target_repos, generated_results)
     ])
 
+    # Phase 4 — compose supergraph (only runs if a datagraph repo is in scope)
+    datagraph_cfg = next((r for r in target_repos if r.get("role") == "datagraph"), None)
+    compose_ok = False
+    if datagraph_cfg:
+        print("\n  [Phase 4] Composing supergraph.graphql from updated subgraphs...")
+        compose_ok = await compose_supergraph(
+            datagraph_repo=datagraph_cfg["repo"],
+            feature_branch=feature_branch,
+            base_branch=base_branch,
+            ticket_key=args.ticket,
+        )
+    else:
+        print("\n  [Phase 4] No datagraph repo in scope — skipping supergraph compose.")
+
     print("\n" + "=" * 50)
     print(f"[+] Pipeline complete! {len(results)} PR(s) opened:")
     for res in results:
         print(f"    [{res['role']}] {res['repo']} → {res['pr_url']}")
+    if datagraph_cfg:
+        status = "composed + committed" if compose_ok else "SKIPPED (run compose.sh manually)"
+        print(f"    [datagraph] supergraph.graphql: {status}")
     print("=" * 50 + "\n")
 
+    supergraph_note = ""
+    if datagraph_cfg:
+        supergraph_note = (
+            "\n\nsupergraph.graphql: recomposed automatically ✓"
+            if compose_ok
+            else "\n\nsupergraph.graphql: compose skipped — run compose.sh manually once subgraph services are up."
+        )
     pr_lines = "\n".join(f"[{r['role']}] {r['pr_url']}" for r in results)
-    add_jira_comment(args.ticket, f"GraphQL pipeline complete.\n\n{pr_lines}")
+    add_jira_comment(args.ticket, f"GraphQL pipeline complete.\n\n{pr_lines}{supergraph_note}")
     print(f"[+] Comment added to {args.ticket}.")
 
 
