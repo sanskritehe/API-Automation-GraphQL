@@ -1,5 +1,5 @@
 """
-Jira Webhook Server
+Jira Webhook Server — GraphQL 4-repo pipeline trigger.
 """
 
 import json
@@ -8,38 +8,39 @@ import subprocess
 import sys
 from fastapi import FastAPI, Request, BackgroundTasks, HTTPException
 from dotenv import load_dotenv
+from api_clients.jira import _parse_description
 
 load_dotenv()
 
 app = FastAPI(title="Jira Pipeline Webhook")
 
-CONFLUENCE_SPACE    = os.getenv("CONFLUENCE_SPACE", "hpeteam2")
-CONFLUENCE_PAGE     = os.getenv("CONFLUENCE_PAGE",  "API Development Guidelines")
-BASE_BRANCH         = os.getenv("BASE_BRANCH",      "main")
-COPILOT_ASSIGNEE    = os.getenv("COPILOT_ASSIGNEE", "").lower()
-
+_COMPANY_CONFIG_PATH = os.path.join(os.path.dirname(__file__), "company_config.json")
 _SERVICE_GROUPS_PATH = os.path.join(os.path.dirname(__file__), "service_groups.json")
 
-# Deduplication set to lock active runs and prevent parallel race conditions
-active_runs = set()
 
-
-def load_service_groups() -> dict:
-    with open(_SERVICE_GROUPS_PATH, "r", encoding="utf-8") as f:
+def load_company_config() -> dict:
+    with open(_COMPANY_CONFIG_PATH, "r", encoding="utf-8") as f:
         return json.load(f)
 
 
-def resolve_keyword(issue: dict) -> str | None:
-    """
-    Scan the ticket text for a keyword that matches a key in service_groups.json.
-    Returns the first match, or None.
-    """
-    groups = load_service_groups()
+def load_service_groups(org: str) -> dict:
+    """Load service_groups.json and inject the org prefix into all repo names."""
+    with open(_SERVICE_GROUPS_PATH, "r", encoding="utf-8") as f:
+        groups = json.load(f)
+    for entries in groups.values():
+        for entry in entries:
+            if "/" not in entry["repo"]:
+                entry["repo"] = f"{org}/{entry['repo']}"
+    return groups
+
+
+def resolve_keyword(issue: dict, groups: dict) -> str | None:
     fields = issue.get("fields", {})
+    description = _parse_description(fields.get("description"))
     text = " ".join([
         issue.get("key", ""),
         fields.get("summary", ""),
-        fields.get("description", "") or "",
+        description,
     ]).lower()
     for keyword in groups:
         if keyword in text:
@@ -48,31 +49,34 @@ def resolve_keyword(issue: dict) -> str | None:
     return None
 
 
-def run_pipeline(issue_key: str, keyword: str):
-    if issue_key in active_runs:
-        print(f"[webhook] Pipeline already active for {issue_key}. Skipping run.")
-        return
-    active_runs.add(issue_key)
-    try:
-        print(f"[webhook] Triggering pipeline for {issue_key} → keyword='{keyword}'")
-        result = subprocess.run(
-            [
-                sys.executable, "pipeline.py",
-                "--ticket",           issue_key,
-                "--confluence-space", CONFLUENCE_SPACE,
-                "--confluence-page",  CONFLUENCE_PAGE,
-                "--keyword",          keyword,
-                "--base-branch",      BASE_BRANCH,
-            ],
-            cwd=os.path.dirname(__file__),
-            capture_output=False,
-        )
-        if result.returncode != 0:
-            print(f"[webhook] Pipeline failed for {issue_key} (exit {result.returncode})")
-        else:
-            print(f"[webhook] Pipeline completed for {issue_key}")
-    finally:
-        active_runs.discard(issue_key)
+def run_pipeline(issue_key: str, keyword: str, cfg: dict):
+    print(f"[webhook] Triggering pipeline for {issue_key} → keyword='{keyword}'")
+    result = subprocess.run(
+        [
+            sys.executable, "pipeline.py",
+            "--ticket",  issue_key,
+            "--keyword", keyword,
+        ],
+        cwd=os.path.dirname(__file__),
+        capture_output=False,
+    )
+    if result.returncode != 0:
+        print(f"[webhook] Pipeline failed for {issue_key} (exit {result.returncode})")
+    else:
+        print(f"[webhook] Pipeline completed for {issue_key}")
+
+
+def run_sync():
+    print("[webhook] Running sync_repos.py...")
+    result = subprocess.run(
+        [sys.executable, "sync_repos.py"],
+        cwd=os.path.dirname(__file__),
+        capture_output=False,
+    )
+    if result.returncode != 0:
+        print("[webhook] sync_repos failed")
+    else:
+        print("[webhook] sync_repos completed")
 
 
 @app.post("/webhook")
@@ -91,6 +95,9 @@ async def jira_webhook(request: Request, background_tasks: BackgroundTasks):
     if not issue_key:
         raise HTTPException(status_code=400, detail="No issue key found in payload")
 
+    cfg = load_company_config()
+    copilot_assignee = cfg.get("copilot_assignee", "").lower()
+
     assignee = issue.get("fields", {}).get("assignee")
     if not assignee:
         return {"status": "ignored", "reason": "no assignee set"}
@@ -101,27 +108,21 @@ async def jira_webhook(request: Request, background_tasks: BackgroundTasks):
     else:
         assignee_email = ""
         assignee_name  = str(assignee).lower()
-    if COPILOT_ASSIGNEE and COPILOT_ASSIGNEE not in (assignee_email, assignee_name):
+    if copilot_assignee and copilot_assignee not in (assignee_email, assignee_name):
         return {"status": "ignored", "reason": f"assignee '{assignee_name}' is not the copilot agent"}
 
-    # Allow the webhook payload to override keyword detection
-    keyword = payload.get("keyword") or resolve_keyword(issue)
+    groups = load_service_groups(cfg["github_org"])
+    keyword = payload.get("keyword") or resolve_keyword(issue, groups)
     if not keyword:
-        groups = load_service_groups()
         return {
             "status": "ignored",
             "reason": "no matching service keyword found",
             "available_keywords": list(groups.keys()),
         }
 
-    if issue_key in active_runs:
-        print(f"[webhook] Received trigger for {issue_key} but a run is already active. Ignoring.")
-        return {"status": "ignored", "reason": "pipeline run already in progress"}
-
     print(f"[webhook] Received: {issue_key} assigned to {assignee} → keyword='{keyword}'")
-    background_tasks.add_task(run_pipeline, issue_key, keyword)
+    background_tasks.add_task(run_pipeline, issue_key, keyword, cfg)
 
-    groups = load_service_groups()
     matched_repos = [e["repo"] for e in groups.get(keyword, [])]
     return {
         "status": "accepted",
@@ -131,18 +132,19 @@ async def jira_webhook(request: Request, background_tasks: BackgroundTasks):
     }
 
 
+@app.post("/sync-repos")
+async def sync_repos(background_tasks: BackgroundTasks):
+    """Trigger a GitHub GraphQL repo discovery and rebuild service_groups.json."""
+    background_tasks.add_task(run_sync)
+    return {"status": "accepted", "message": "sync_repos started in background"}
+
+
 @app.get("/health")
 def health():
-    return {"status": "ok"}
-
-
-if __name__ == "__main__":
-    import uvicorn
-    print("[*] Starting Jira Webhook Server with automatic folder exclusions...")
-    uvicorn.run(
-        "webhook_server:app",
-        host="0.0.0.0",
-        port=8000,
-        reload=True,
-        reload_excludes=["app/*", "app/**/*", "**/app/*", "**/app/**/*", "resp*.txt", "judge*.txt"]
-    )
+    cfg = load_company_config()
+    groups = load_service_groups(cfg["github_org"])
+    return {
+        "status": "ok",
+        "org": cfg["github_org"],
+        "service_groups": {k: len(v) for k, v in groups.items()},
+    }

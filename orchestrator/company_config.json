@@ -1,0 +1,14 @@
+{
+  "github_org": "sanskritehe",
+  "confluence_space": "~71202046a5693ef7834f62afe3bad6ad83fef8",
+  "confluence_page": "API-Based Automation Platform",
+  "prompts_repo": "Appointment-Service",
+  "prompts_branch": "main",
+  "base_branch": "main",
+  "copilot_assignee": "copilotagentbot@gmail.com",
+  "repo_discovery": {
+    "auto_sync": false,
+    "api_suffix_patterns": ["-service", "-api"],
+    "db_suffix_patterns": ["-db", "-database-service", "-database"]
+  }
+}

@@ -2,6 +2,24 @@ import base64
 import os
 import requests
 
+_GRAPHQL_URL = "https://api.github.com/graphql"
+
+_DISCOVER_REPOS_QUERY = """
+query DiscoverRepos($org: String!, $cursor: String) {
+  organization(login: $org) {
+    repositories(first: 50, after: $cursor, orderBy: {field: NAME, direction: ASC}) {
+      pageInfo { hasNextPage endCursor }
+      nodes {
+        name
+        isArchived
+        defaultBranchRef { name }
+        primaryLanguage { name }
+      }
+    }
+  }
+}
+"""
+
 
 def _headers() -> dict:
     return {
@@ -15,6 +33,55 @@ def _repo_url(repo: str) -> str:
     return f"https://api.github.com/repos/{repo}"
 
 
+def graphql_query(query: str, variables: dict = None) -> dict:
+    """Execute a GitHub GraphQL (v4) query and return the data payload."""
+    payload = {"query": query}
+    if variables:
+        payload["variables"] = variables
+    resp = requests.post(_GRAPHQL_URL, json=payload, headers=_headers())
+    resp.raise_for_status()
+    result = resp.json()
+    if "errors" in result:
+        raise RuntimeError(f"GitHub GraphQL errors: {result['errors']}")
+    return result.get("data", {})
+
+
+def discover_org_repos(org: str) -> list[dict]:
+    """
+    Return all non-archived repos for a GitHub org or personal account via REST API.
+    Each item: {"name": str, "default_branch": str, "language": str | None}
+    Handles pagination automatically; works for both orgs and personal accounts.
+    """
+    repos = []
+    page = 1
+    while True:
+        # Try org endpoint first; fall back to user endpoint for personal accounts
+        resp = requests.get(
+            f"https://api.github.com/orgs/{org}/repos",
+            headers=_headers(),
+            params={"per_page": 50, "page": page, "type": "all"},
+        )
+        if resp.status_code in (404, 403):
+            resp = requests.get(
+                f"https://api.github.com/users/{org}/repos",
+                headers=_headers(),
+                params={"per_page": 50, "page": page},
+            )
+        resp.raise_for_status()
+        batch = resp.json()
+        if not batch:
+            break
+        for r in batch:
+            if not r.get("archived"):
+                repos.append({
+                    "name": r["name"],
+                    "default_branch": r.get("default_branch", "main"),
+                    "language": r.get("language"),
+                })
+        page += 1
+    return repos
+
+
 def get_file(repo: str, path: str, branch: str = "main") -> str:
     """Return decoded file content from a GitHub repo."""
     url = f"{_repo_url(repo)}/contents/{path}"
@@ -22,6 +89,95 @@ def get_file(repo: str, path: str, branch: str = "main") -> str:
     resp.raise_for_status()
     encoded = resp.json().get("content", "")
     return base64.b64decode(encoded).decode("utf-8")
+
+
+_TEXT_EXTENSIONS = {".py", ".yaml", ".yml", ".md", ".txt", ".toml", ".cfg", ".ini", ".sh"}
+
+# Per-role file path patterns — only files matching these are included in the context.
+# Keeps token usage within Groq's 12K TPM free-tier limit.
+_ROLE_FILE_PATTERNS: dict[str, list[str]] = {
+    "api": [
+        "graphql_schema.py",
+        "app/routes/appointments.py",
+        "app/services/booking_service.py",
+        "app/models.py",
+        "requirements.txt",
+    ],
+    "database": [
+        "graphql_schema.py",
+        "app/models.py",
+        "app/database.py",
+        "app/main.py",
+        "requirements.txt",
+    ],
+    "gateway": [
+        "app/routes/appointments.py",
+        "app/graphql_client.py",
+        "app/main.py",
+        "requirements.txt",
+    ],
+    "datagraph": [
+        "router.yaml",
+        "supergraph.yaml",
+        "docker-compose.yml",
+        "compose.sh",
+    ],
+}
+
+
+def fetch_repo_files(repo: str, branch: str = "main", role: str = "") -> str:
+    """
+    Fetch relevant text files from a GitHub repo, filtered by role to keep token usage low.
+    Returns formatted ### FILE: blocks.
+    If role is empty or unrecognised, fetches all text files (capped at 8K chars total).
+    """
+    allowed = _ROLE_FILE_PATTERNS.get(role, [])
+
+    ref_resp = requests.get(f"{_repo_url(repo)}/git/ref/heads/{branch}", headers=_headers())
+    ref_resp.raise_for_status()
+    sha = ref_resp.json()["object"]["sha"]
+
+    tree_resp = requests.get(
+        f"{_repo_url(repo)}/git/trees/{sha}",
+        headers=_headers(),
+        params={"recursive": "1"},
+    )
+    tree_resp.raise_for_status()
+    tree = tree_resp.json().get("tree", [])
+
+    blocks = []
+    total_chars = 0
+    char_cap = 12_000  # ~3K tokens — leaves plenty of room for prompt + response
+
+    for item in tree:
+        if item["type"] != "blob":
+            continue
+        path = item["path"]
+        if "__pycache__" in path or path.endswith(".pyc"):
+            continue
+
+        # Role-based filter: skip files not in the allowed list
+        if allowed and path not in allowed:
+            continue
+
+        # Generic fallback: extension filter
+        ext = "." + path.rsplit(".", 1)[-1] if "." in path else ""
+        if not allowed and ext not in _TEXT_EXTENSIONS:
+            continue
+
+        if total_chars >= char_cap:
+            break
+        try:
+            content = get_file(repo, path, branch)
+        except Exception:
+            continue
+
+        lang = "python" if ext == ".py" else "yaml" if ext in {".yaml", ".yml"} else ""
+        block = f"### FILE: {path}\n```{lang}\n{content}\n```"
+        blocks.append(block)
+        total_chars += len(block)
+
+    return "\n\n".join(blocks)
 
 
 def create_branch(repo: str, branch: str, base: str = "main"):
