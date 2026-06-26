@@ -54,7 +54,7 @@ def run_pipeline(issue_key: str, keyword: str):
         return
     active_runs.add(issue_key)
     try:
-        print(f"[webhook] Triggering pipeline for {issue_key} → keyword='{keyword}'")
+        print(f"[webhook] Triggering pipeline for {issue_key} -> keyword='{keyword}'")
         result = subprocess.run(
             [
                 sys.executable, "pipeline.py",
@@ -118,7 +118,7 @@ async def jira_webhook(request: Request, background_tasks: BackgroundTasks):
         print(f"[webhook] Received trigger for {issue_key} but a run is already active. Ignoring.")
         return {"status": "ignored", "reason": "pipeline run already in progress"}
 
-    print(f"[webhook] Received: {issue_key} assigned to {assignee} → keyword='{keyword}'")
+    print(f"[webhook] Received: {issue_key} assigned to {assignee} -> keyword='{keyword}'")
     background_tasks.add_task(run_pipeline, issue_key, keyword)
 
     groups = load_service_groups()
