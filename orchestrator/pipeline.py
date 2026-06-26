@@ -71,9 +71,9 @@ def detect_http_method(ticket: dict) -> str:
     text = f"{ticket['summary']} {ticket['description']}".lower()
     
     # 1. Check for GraphQL specific operations first
-    if "graphql query" in text:
+    if "graphql query" in text or ("graphql" in text and "query" in text):
         return "QUERY"
-    if "graphql mutation" in text:
+    if "graphql mutation" in text or ("graphql" in text and "mutation" in text):
         return "MUTATION"
         
     # 2. Literal method name check
@@ -85,7 +85,12 @@ def detect_http_method(ticket: dict) -> str:
     for method in ["PATCH", "DELETE", "PUT", "POST", "GET"]:
         if any(kw in text for kw in _METHOD_KEYWORDS.get(method, [])):
             return method
-    return "POST"
+    
+    raise ValueError(
+        f"Could not auto-detect HTTP method or GraphQL operation from ticket text (summary: '{ticket['summary']}'). "
+        "Please ensure the Jira ticket description contains standard action keywords (e.g. GET, POST, PUT, DELETE, query, mutation) "
+        "or specify the method explicitly."
+    )
 
 
 def detect_service_keyword(ticket: dict, groups: dict) -> str | None:
@@ -265,170 +270,199 @@ async def main():
     args = parser.parse_args()
 
     base_branch = args.base_branch
+    ticket_key = args.ticket
 
-    # ------------------------------------------------------------------
-    # Step 1: Fetch Jira ticket
-    # ------------------------------------------------------------------
-    print(f"\n[1/6] Fetching Jira ticket {args.ticket}...")
-    ticket = get_jira_issue(args.ticket)
-    print(f"  Summary : {ticket['summary']}")
-    print(f"  Status  : {ticket['status']}")
+    try:
+        # ------------------------------------------------------------------
+        # Step 1: Fetch Jira ticket
+        # ------------------------------------------------------------------
+        print(f"\n[1/6] Fetching Jira ticket {ticket_key}...")
+        ticket = get_jira_issue(ticket_key)
+        print(f"  Summary : {ticket['summary']}")
+        print(f"  Status  : {ticket['status']}")
 
-    # ------------------------------------------------------------------
-    # Step 2: Fetch Confluence spec
-    # ------------------------------------------------------------------
-    print(f"\n[2/6] Fetching Confluence page '{args.confluence_page}'...")
-    spec = get_confluence_page(args.confluence_space, args.confluence_page)
-    print(f"  Page : {spec['title']}")
-    print(f"  URL  : {spec['url']}")
+        # ------------------------------------------------------------------
+        # Step 2: Fetch Confluence spec
+        # ------------------------------------------------------------------
+        print(f"\n[2/6] Fetching Confluence page '{args.confluence_page}'...")
+        spec = get_confluence_page(args.confluence_space, args.confluence_page)
+        print(f"  Page : {spec['title']}")
+        print(f"  URL  : {spec['url']}")
 
-    # ------------------------------------------------------------------
-    # Step 3: Detect method + resolve target repos from service_groups.json
-    # ------------------------------------------------------------------
-    print("\n[3/6] Resolving target repos...")
-    groups = load_service_groups()
-    method = detect_http_method(ticket)
-    print(f"  Detected HTTP method: {method}")
+        # ------------------------------------------------------------------
+        # Step 3: Detect method + resolve target repos from service_groups.json
+        # ------------------------------------------------------------------
+        print("\n[3/6] Resolving target repos...")
+        groups = load_service_groups()
+        method = detect_http_method(ticket)
+        print(f"  Detected HTTP method: {method}")
 
-    keyword = args.keyword or detect_service_keyword(ticket, groups)
-    if not keyword:
-        raise SystemExit(
-            f"Could not auto-detect a service keyword from ticket text. "
-            f"Pass --keyword explicitly. Available: {list(groups.keys())}"
-        )
-    print(f"  Service keyword: '{keyword}'")
-
-    target_repos = match_repos(groups, keyword, method)
-    if not target_repos:
-        raise SystemExit(
-            f"No repos in service_groups.json match keyword='{keyword}' + method={method}."
-        )
-    print(f"  Target repos ({len(target_repos)}):")
-    for r in target_repos:
-        print(f"    - {r['repo']}  [{r['role']}]")
-
-    # ------------------------------------------------------------------
-    # Step 4: Build prompt.md (once, shared across all repos)
-    # ------------------------------------------------------------------
-    print("\n[4/6] Building prompt.md...")
-    template = fetch_prompt_template(method)
-    prompt_content = build_prompt(ticket, spec, template)
-    with open("prompt.md", "w", encoding="utf-8") as f:
-        f.write(prompt_content)
-    print(f"  Saved prompt.md (using {method}.md template)")
-
-    run_id = datetime.now().strftime("%Y%m%d%H%M%S")
-    feature_branch = f"feature/{args.ticket.lower()}-{method.lower()}-{run_id}"
-
-    # ------------------------------------------------------------------
-    # Step 5: Run Copilot generation + evaluation loop (once, shared)
-    # ------------------------------------------------------------------
-    print("\n[5/6] Running GitHub Copilot generation + Copilot evaluation loop...")
-    app_dir = os.path.join(os.path.dirname(__file__), "app")
-    final_code = await run_orchestrator(prompt_content, app_dir=app_dir)
-
-    with open("generated_solution.md", "w", encoding="utf-8") as f:
-        f.write(final_code)
-    print("  Saved generated_solution.md locally")
-
-    # ------------------------------------------------------------------
-    # Step 5.5: Sync generated code, run compose.py, and copy schemas back
-    # ------------------------------------------------------------------
-    print("\n[5.5/6] Syncing generated files and composing GraphQL schemas...")
-    orchestrator_dir = os.path.dirname(os.path.abspath(__file__))
-    workspace_dir = os.path.abspath(os.path.join(orchestrator_dir, "..", ".."))
-    src_app = os.path.join(orchestrator_dir, "app", "app")
-
-    # 1. Sync generated code to sibling folders matching the active service group
-    active_repos = groups.get(keyword.lower(), [])
-    for r in active_repos:
-        role = r.get("role")
-        repo_path = r.get("repo")
-        if role in ["api", "database", "gateway"]:
-            dir_name = repo_path.split("/")[-1]
-            dst_app = os.path.join(workspace_dir, dir_name, "app")
-            if os.path.exists(os.path.dirname(dst_app)):
-                print(f"  Syncing app/ to {dir_name}...")
-                def copy_recursive(src, dst):
-                    if not os.path.exists(dst):
-                        os.makedirs(dst)
-                    for item in os.listdir(src):
-                        s = os.path.join(src, item)
-                        d = os.path.join(dst, item)
-                        if os.path.isdir(s):
-                            if item == "__pycache__":
-                                continue
-                            copy_recursive(s, d)
-                        else:
-                            shutil.copy2(s, d)
-                copy_recursive(src_app, dst_app)
-
-    # 2. Find and run compose.py in graphql-datagraph repository if configured
-    graphql_repo_cfg = next((r for r in active_repos if r.get("role") == "graphql"), None)
-    if graphql_repo_cfg:
-        dir_name = graphql_repo_cfg["repo"].split("/")[-1]
-        compose_py = os.path.join(workspace_dir, dir_name, "compose.py")
-        if os.path.exists(compose_py):
-            print("  Running compose.py to compile GraphQL schemas...")
-            res = subprocess.run(
-                [sys.executable, compose_py],
-                cwd=os.path.dirname(compose_py),
-                capture_output=True,
-                text=True
+        keyword = args.keyword or detect_service_keyword(ticket, groups)
+        if not keyword:
+            raise SystemExit(
+                f"Could not auto-detect a service keyword from ticket text. "
+                f"Pass --keyword explicitly. Available: {list(groups.keys())}"
             )
-            if res.returncode != 0:
-                print("  Error running compose.py:")
-                print(res.stdout)
-                print(res.stderr)
-                raise SystemExit("Schema composition failed.")
-            else:
-                print("  compose.py output:")
-                print(res.stdout)
+        print(f"  Service keyword: '{keyword}'")
 
-            # 3. Copy composed graphql files back to orchestrator directory for deployment staging
-            graphql_files = ["supergraph.graphql", "appointment-service.graphql", "appointment-db-service.graphql"]
-            graphql_dir = os.path.dirname(compose_py)
-            for gfile in graphql_files:
-                src_gfile = os.path.join(graphql_dir, gfile)
-                dst_gfile = os.path.join(orchestrator_dir, gfile)
-                if os.path.exists(src_gfile):
-                    shutil.copy2(src_gfile, dst_gfile)
-                    print(f"  Staged {gfile} to orchestrator directory.")
+        target_repos = match_repos(groups, keyword, method)
+        if not target_repos:
+            raise SystemExit(
+                f"No repos in service_groups.json match keyword='{keyword}' + method={method}."
+            )
+        print(f"  Target repos ({len(target_repos)}):")
+        for r in target_repos:
+            print(f"    - {r['repo']}  [{r['role']}]")
+
+        # ------------------------------------------------------------------
+        # Step 4: Build prompt.md (once, shared across all repos)
+        # ------------------------------------------------------------------
+        print("\n[4/6] Building prompt.md...")
+        template = fetch_prompt_template(method)
+        prompt_content = build_prompt(ticket, spec, template)
+        with open("prompt.md", "w", encoding="utf-8") as f:
+            f.write(prompt_content)
+        print(f"  Saved prompt.md (using {method}.md template)")
+
+        run_id = datetime.now().strftime("%Y%m%d%H%M%S")
+        feature_branch = f"feature/{ticket_key.lower()}-{method.lower()}-{run_id}"
+
+        # ------------------------------------------------------------------
+        # Step 5: Run Copilot generation + evaluation loop (once, shared)
+        # ------------------------------------------------------------------
+        print("\n[5/6] Running GitHub Copilot generation + Copilot evaluation loop...")
+        app_dir = os.path.join(os.path.dirname(__file__), "app")
+        final_code = await run_orchestrator(prompt_content, app_dir=app_dir)
+
+        with open("generated_solution.md", "w", encoding="utf-8") as f:
+            f.write(final_code)
+        print("  Saved generated_solution.md locally")
+
+        # ------------------------------------------------------------------
+        # Step 5.5: Sync generated code, run compose.py, and copy schemas back
+        # ------------------------------------------------------------------
+        print("\n[5.5/6] Syncing generated files and composing GraphQL schemas...")
+        orchestrator_dir = os.path.dirname(os.path.abspath(__file__))
+        workspace_dir = os.path.abspath(os.path.join(orchestrator_dir, "..", ".."))
+        src_app = os.path.join(orchestrator_dir, "app", "app")
+
+        # 1. Sync generated code to sibling folders matching the active service group
+        active_repos = groups.get(keyword.lower(), [])
+        for r in active_repos:
+            role = r.get("role")
+            repo_path = r.get("repo")
+            if role in ["api", "database", "gateway"]:
+                dir_name = repo_path.split("/")[-1]
+                dst_app = os.path.join(workspace_dir, dir_name, "app")
+                if os.path.exists(os.path.dirname(dst_app)):
+                    print(f"  Syncing app/ to {dir_name}...")
+                    def copy_recursive(src, dst):
+                        if not os.path.exists(dst):
+                            os.makedirs(dst)
+                        for item in os.listdir(src):
+                            s = os.path.join(src, item)
+                            d = os.path.join(dst, item)
+                            if os.path.isdir(s):
+                                if item == "__pycache__":
+                                    continue
+                                copy_recursive(s, d)
+                            else:
+                                shutil.copy2(s, d)
+                    copy_recursive(src_app, dst_app)
+
+        # 2. Find and run compose.py in graphql-datagraph repository if configured
+        graphql_repo_cfg = next((r for r in target_repos if r.get("role") == "graphql"), None)
+        if graphql_repo_cfg:
+            dir_name = graphql_repo_cfg["repo"].split("/")[-1]
+            compose_py = os.path.join(workspace_dir, dir_name, "compose.py")
+            if os.path.exists(compose_py):
+                print("  Running compose.py to compile GraphQL schemas...")
+                res = subprocess.run(
+                    [sys.executable, compose_py],
+                    cwd=os.path.dirname(compose_py),
+                    capture_output=True,
+                    text=True
+                )
+                if res.returncode != 0:
+                    print("  Error running compose.py:")
+                    print(res.stdout)
+                    print(res.stderr)
+                    raise SystemExit("Schema composition failed.")
                 else:
-                    print(f"  Warning: Expected GraphQL file {src_gfile} not found.")
+                    print("  compose.py output:")
+                    print(res.stdout)
 
-    # ------------------------------------------------------------------
-    # Step 6: Fan out — parallel branch + commit + PR across all target repos
-    # ------------------------------------------------------------------
-    print(f"\n[6/6] Opening PRs in parallel across {len(target_repos)} repo(s)...")
-    results = await asyncio.gather(*[
-        deploy_to_repo(
-            repo_cfg=r,
-            ticket=ticket,
-            spec=spec,
-            feature_branch=feature_branch,
-            prompt_content=prompt_content,
-            final_code=final_code,
-            base_branch=base_branch,
-            app_dir=app_dir,
+                # 3. Copy composed graphql files back to orchestrator directory for deployment staging
+                graphql_files = ["supergraph.graphql", "appointment-service.graphql", "appointment-db-service.graphql"]
+                graphql_dir = os.path.dirname(compose_py)
+                for gfile in graphql_files:
+                    src_gfile = os.path.join(graphql_dir, gfile)
+                    dst_gfile = os.path.join(orchestrator_dir, gfile)
+                    if os.path.exists(src_gfile):
+                        shutil.copy2(src_gfile, dst_gfile)
+                        print(f"  Staged {gfile} to orchestrator directory.")
+                    else:
+                        print(f"  Warning: Expected GraphQL file {src_gfile} not found.")
+
+        # ------------------------------------------------------------------
+        # Step 6: Fan out — parallel branch + commit + PR across all target repos
+        # ------------------------------------------------------------------
+        print(f"\n[6/6] Opening PRs in parallel across {len(target_repos)} repo(s)...")
+        results = await asyncio.gather(*[
+            deploy_to_repo(
+                repo_cfg=r,
+                ticket=ticket,
+                spec=spec,
+                feature_branch=feature_branch,
+                prompt_content=prompt_content,
+                final_code=final_code,
+                base_branch=base_branch,
+                app_dir=app_dir,
+            )
+            for r in target_repos
+        ])
+
+        print("\n============================================")
+        print(f"[+] Pipeline complete! {len(results)} PR(s) opened:")
+        for res in results:
+            print(f"    [{res['role']}] {res['repo']} -> {res['pr_url']}")
+        print("============================================\n")
+
+        # Post a comment on the Jira ticket with all PR links
+        pr_lines = "\n".join(f"[{r['role']}] {r['pr_url']}" for r in results)
+        comment_body = (
+            f"PR successfully completed.\n\n{pr_lines}"
         )
-        for r in target_repos
-    ])
+        print(f"[+] Adding comment to Jira ticket {ticket_key}...")
+        add_jira_comment(ticket_key, comment_body)
+        print(f"[+] Comment added to {ticket_key}.")
 
-    print("\n============================================")
-    print(f"[+] Pipeline complete! {len(results)} PR(s) opened:")
-    for res in results:
-        print(f"    [{res['role']}] {res['repo']} -> {res['pr_url']}")
-    print("============================================\n")
+    except Exception as e:
+        error_msg = str(e)
+        print(f"\n[-] Pipeline failed: {error_msg}")
 
-    # Post a comment on the Jira ticket with all PR links
-    pr_lines = "\n".join(f"[{r['role']}] {r['pr_url']}" for r in results)
-    comment_body = (
-        f"PR successfully completed.\n\n{pr_lines}"
-    )
-    print(f"[+] Adding comment to Jira ticket {args.ticket}...")
-    add_jira_comment(args.ticket, comment_body)
-    print(f"[+] Comment added to {args.ticket}.")
+        try:
+            import re
+            match = re.match(r"([A-Z]+)-(\d+)", ticket_key)
+            if match:
+                prefix, num = match.groups()
+                next_ticket = f"{prefix}-{int(num) + 1}"
+                ticket_suggestion = f"To bypass this issue or check if a new ticket passes, you can try triggering the pipeline with the next sequential ticket: *{next_ticket}*."
+            else:
+                ticket_suggestion = "Ensure your ticket requirements are correct and try running the pipeline again."
+
+            failure_comment = (
+                f"❌ *Pipeline execution failed!*\n\n"
+                f"*Reason for failure:*\n{{code}}\n{error_msg}\n{{code}}\n\n"
+                f"{ticket_suggestion}"
+            )
+            print(f"[+] Posting failure comment to Jira ticket {ticket_key}...")
+            add_jira_comment(ticket_key, failure_comment)
+            print(f"[+] Failure comment posted to {ticket_key}.")
+        except Exception as comment_err:
+            print(f"[-] Could not post failure comment to Jira: {comment_err}")
+
+        sys.exit(1)
 
 
 if __name__ == "__main__":
