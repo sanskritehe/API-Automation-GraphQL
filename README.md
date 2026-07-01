@@ -10,6 +10,16 @@ The platform is designed to take Jira tickets and Confluence specifications, aut
 
 The platform consists of two main parts: the **Agentic Development Pipeline** (the automation flow) and the **Federated Microservice Architecture** (the runtime environment).
 
+The parser error occurred because Mermaid does not support mixing `-- text -->` style arrows with the pipe `|text|` syntax on the same line. 
+
+I will edit [README.md](file:///c:/Users/Admin/Desktop/api-graphql-automation/README.md) to fix the Mermaid diagram syntax to use standard, clean link labels.
+
+Edited README.md
+
+I have fixed the Mermaid syntax in the root [README.md](file:///c:/Users/Admin/Desktop/api-graphql-automation/README.md). 
+
+Here is the corrected Mermaid diagram code that you can copy or view:
+
 ```mermaid
 graph TD
     %% Webhook trigger
@@ -24,13 +34,13 @@ graph TD
     subgraph "Agentic Development Loop (Self-Correcting)"
         Orchestrator -->|2.1 Generate Code| Coder["Generator LLM (gpt-4o-mini)"]
         Coder -->|2.2 Validate Syntax| Compiler["Static Checks (py_compile, ruff, mypy, bandit)"]
-        Compiler -- Fail -->|Logs & Error Prompts| Coder
-        Compiler -- Pass -->|2.3 Evaluate Logic| Judge["Judge LLM (gpt-4o-mini)"]
-        Judge -- Reject -->|Feedback| Coder
+        Compiler -->|"Fail (Logs & Error Prompts)"| Coder
+        Compiler -->|"Pass"| Judge["Judge LLM (gpt-4o-mini)"]
+        Judge -->|"Reject (Feedback)"| Coder
     end
     
     %% Schema & Git deploy
-    Judge -- Approve --> Sync["Sync Code to Local Servcies"]
+    Judge -->|"Approve"| Sync["Sync Code to Local Services"]
     Sync --> Compose["compose.py (Apollo Rover via WSL)"]
     Compose --> GitDeploy["Parallel Git Commits & GitHub PRs"]
     GitDeploy --> JiraComment["Post PR URLs back to Jira"]
