@@ -10,50 +10,33 @@ A Jira ticket assignment fires a webhook. The pipeline fetches the spec from Con
 
 ```mermaid
 flowchart TD
-    %% ── Trigger ──────────────────────────────────────────────
-    A([Jira Ticket Assigned]) -->|Issue Updated event| B[ngrok Tunnel\nport 8000]
-    B -->|POST /webhook| C[webhook_server.py\nFastAPI]
+    A([Jira Ticket Assigned]) -->|Issue Updated event| B[ngrok Tunnel - port 8000]
+    B -->|POST /webhook| C[webhook_server.py FastAPI]
 
-    %% ── Pipeline Orchestration ────────────────────────────────
     C -->|Spawns subprocess| D[pipeline.py]
     D -->|Fetch API spec| E[(Confluence Wiki)]
-    D -->|Detect method + keyword\nservice_groups.json| F{Route to repos}
-
-    %% ── Agentic Loop ──────────────────────────────────────────
+    D -->|Detect method + keyword via service_groups.json| F{Route to repos}
     F -->|Build prompt.md| G[orchestrator.py]
 
-    subgraph LOOP ["Self-Correcting Generation Loop  (max 3 retries)"]
-        direction TB
-        G1[Generator LLM\ngpt-4o-mini] -->|writes code| G2
+    G --> G1[Generator LLM gpt-4o-mini]
+    G1 -->|writes code| G2[py_compile]
+    G2 --> G3[ruff]
+    G3 --> G4[mypy]
+    G4 --> G5[bandit]
+    G5 -->|Fail - inject errors into prompt| G1
+    G5 -->|Pass| G6[Judge LLM gpt-4o-mini]
+    G6 -->|Reject - inject feedback into prompt| G1
 
-        subgraph L1 ["Layer 1 — Static Checks"]
-            G2[py_compile] --> G3[ruff] --> G4[mypy] --> G5[bandit]
-        end
-
-        G5 -->|Fail → inject errors into prompt| G1
-        G5 -->|Pass| G6
-
-        subgraph L2 ["Layer 2 — LLM Judge"]
-            G6[Judge LLM\ngpt-4o-mini\nJSON rubric evaluation]
-        end
-
-        G6 -->|Reject → inject feedback into prompt| G1
-    end
-
-    %% ── Post-approval ─────────────────────────────────────────
-    G6 -->|Approve| H[Sync code to\nlocal service folders]
-    H --> I[compose.py\nApollo Rover via WSL\ncompiles supergraph]
-    I --> J[asyncio.gather\nParallel fan-out]
+    G6 -->|Approve| H[Sync code to local service folders]
+    H --> I[compose.py - Apollo Rover compiles supergraph]
+    I --> J[asyncio.gather - Parallel fan-out]
 
     J -->|api role| K[Appointment-Service PR]
     J -->|database role| L[Appointment-Database-Service PR]
     J -->|gateway role| M[rest-api-gateway PR]
-    J -->|graphql role| N[graphql-datagraph PR\n.graphql schemas only]
+    J -->|graphql role| N[graphql-datagraph PR]
 
     K & L & M & N --> O([PR URLs posted to Jira])
-
-  
-    end
 ```
 
 ---
