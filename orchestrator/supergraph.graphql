@@ -19,16 +19,6 @@ directive @join__unionMember(graph: join__Graph!, member: String!) repeatable on
 
 directive @link(url: String, as: String, for: link__Purpose, import: [link__Import]) repeatable on SCHEMA
 
-type Appointment
-  @join__type(graph: APPOINTMENT_DB_SERVICE)
-  @join__type(graph: APPOINTMENT_SERVICE)
-{
-  id: Int!
-  user: String!
-  time: String!
-  status: String!
-}
-
 type AppointmentStorage
   @join__type(graph: APPOINTMENT_DB_SERVICE)
   @join__type(graph: APPOINTMENT_SERVICE)
@@ -65,6 +55,5 @@ type Query
   @join__type(graph: APPOINTMENT_SERVICE)
 {
   appointmentRecord(id: Int!): AppointmentStorage
-  appointment(id: Int!): Appointment
-  appointmentById(id: Int!): Appointment
+  getAppointment(id: Int!): AppointmentStorage
 }

@@ -332,6 +332,39 @@ async def main():
         # ------------------------------------------------------------------
         print("\n[5/6] Running GitHub Copilot generation + Copilot evaluation loop...")
         app_dir = os.path.join(os.path.dirname(__file__), "app")
+
+        # Clean and sync staging folder on start
+        print("  Cleaning and syncing staging directory on start...")
+        if os.path.exists(app_dir):
+            shutil.rmtree(app_dir)
+        os.makedirs(os.path.join(app_dir, "app"), exist_ok=True)
+
+        orchestrator_dir = os.path.dirname(os.path.abspath(__file__))
+        workspace_dir = os.path.abspath(os.path.join(orchestrator_dir, "..", ".."))
+
+        for repo_cfg in target_repos:
+            role = repo_cfg.get("role")
+            repo_path = repo_cfg.get("repo")
+            if role in ["api", "database", "gateway"]:
+                dir_name = repo_path.split("/")[-1]
+                src_repo_app = os.path.join(workspace_dir, dir_name, "app")
+                if os.path.exists(src_repo_app):
+                    print(f"    Syncing baseline app/ from local {dir_name}...")
+                    dst_repo_app = os.path.join(app_dir, "app")
+                    def copy_recursive(src, dst):
+                        for item in os.listdir(src):
+                            s = os.path.join(src, item)
+                            d = os.path.join(dst, item)
+                            if os.path.isdir(s):
+                                if item == "__pycache__":
+                                    continue
+                                if not os.path.exists(d):
+                                    os.makedirs(d)
+                                copy_recursive(s, d)
+                            else:
+                                shutil.copy2(s, d)
+                    copy_recursive(src_repo_app, dst_repo_app)
+
         final_code = await run_orchestrator(prompt_content, app_dir=app_dir)
 
         with open("generated_solution.md", "w", encoding="utf-8") as f:
