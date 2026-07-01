@@ -52,13 +52,7 @@ flowchart TD
 
     K & L & M & N --> O([PR URLs posted to Jira])
 
-    %% ── Runtime Architecture ──────────────────────────────────
-    subgraph RUNTIME ["Runtime Microservice Environment"]
-        direction LR
-        P[REST Client] -->|HTTP :8080| Q[rest-api-gateway]
-        Q -->|Translates to GraphQL| R[Apollo Router\n:4000]
-        R -->|Federated query| S[Appointment-Service\n:8001]
-        R -->|Federated query| T[Appointment-Database-Service\n:8000]
+  
     end
 ```
 
